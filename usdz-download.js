@@ -1,5 +1,6 @@
 const fs = require('fs');
 const path = require('path');
+const os = require('os');
 
 const HUNYUAN_URL = 'https://3d.hunyuan.tencent.com/assets';
 const DOWNLOADS_DIR = 'C:\\usdz\\downloads';
@@ -96,44 +97,68 @@ async function selectUSDZFormat(page) {
   }
 }
 
-async function downloadFile(page, filename) {
-  return new Promise(async (resolve, reject) => {
-    let resolved = false;
+async function downloadFile(page, itemIdx, assetIdx) {
+  // Files download to browser's default Downloads folder, not DOWNLOADS_DIR
+  // We need to monitor the browser Downloads folder and move files here
 
-    const downloadPromise = new Promise((resolve) => {
-      const handler = (download) => {
-        resolved = true;
-        page.removeListener('download', handler);
-        resolve(download.suggestedFilename());
-      };
-      page.on('download', handler);
-    });
+  const homeDir = require('os').homedir();
+  const browserDownloadsDir = path.join(homeDir, 'Downloads');
 
-    try {
-      const downloadButton = page.locator('role=button[name="download"]').first();
-      await downloadButton.click();
+  if (!fs.existsSync(browserDownloadsDir)) {
+    throw new Error(`Browser Downloads folder not found: ${browserDownloadsDir}`);
+  }
 
-      const dlFilename = await Promise.race([
-        downloadPromise,
-        new Promise((_, reject) =>
-          setTimeout(() => reject(new Error('Download event timeout')), TIMEOUT_DOWNLOAD)
-        )
-      ]);
+  // Get current browser Downloads files
+  const beforeFiles = fs.readdirSync(browserDownloadsDir).filter(f => f.endsWith('.usdz'));
+  const beforeSet = new Set(beforeFiles);
 
-      const fileExists = await waitForFile(dlFilename);
-      if (fileExists) {
-        resolve(dlFilename);
-      } else {
-        reject(new Error(`Downloaded file did not appear: ${dlFilename}`));
+  // Click download button
+  const downloadButton = page.locator('role=button[name="download"]').first();
+  await downloadButton.click();
+
+  // Wait for a new file to appear in browser Downloads folder
+  const startTime = Date.now();
+  let newFile = null;
+  let newFileFullPath = null;
+
+  while (Date.now() - startTime < TIMEOUT_DOWNLOAD) {
+    const afterFiles = fs.readdirSync(browserDownloadsDir).filter(f => f.endsWith('.usdz'));
+
+    // Find new files that appeared in browser Downloads
+    const newFiles = afterFiles.filter(f => !beforeSet.has(f));
+
+    if (newFiles.length > 0) {
+      // Use the first new file found
+      newFile = newFiles[0];
+      newFileFullPath = path.join(browserDownloadsDir, newFile);
+
+      // Wait a bit to ensure file is fully written
+      await new Promise(r => setTimeout(r, 1500));
+
+      // Verify file exists and has substantial content
+      if (fs.existsSync(newFileFullPath)) {
+        const stats = fs.statSync(newFileFullPath);
+        if (stats.size > 1000000) { // At least 1 MB
+          // Move file to target downloads directory
+          const targetPath = path.join(DOWNLOADS_DIR, newFile);
+          fs.copyFileSync(newFileFullPath, targetPath);
+
+          // Verify copy succeeded
+          if (fs.existsSync(targetPath)) {
+            const copiedStats = fs.statSync(targetPath);
+            if (copiedStats.size === stats.size) {
+              console.log(`File appeared and moved: ${newFile} (${(stats.size / 1024 / 1024).toFixed(2)} MB)`);
+              return newFile;
+            }
+          }
+        }
       }
-    } catch (err) {
-      if (!resolved) {
-        const handler = page.listenerCount('download');
-        page.removeAllListeners('download');
-      }
-      reject(err);
     }
-  });
+
+    await new Promise(r => setTimeout(r, 500));
+  }
+
+  throw new Error('No new file appeared after download click');
 }
 
 async function closeViewer(page) {
@@ -264,7 +289,7 @@ async function downloadAllAssets(context) {
           await openItemViewer(page, itemIdx, assetIdx);
           await selectUSDZFormat(page);
 
-          const filename = await downloadFile(page, `asset_${itemIdx}_${assetIdx}`);
+          const filename = await downloadFile(page, itemIdx, assetIdx);
           itemAssets.push(filename);
           console.log(`    Downloaded: ${filename}`);
 
