@@ -4,7 +4,6 @@ const path = require('path');
 const HUNYUAN_URL = 'https://3d.hunyuan.tencent.com/assets';
 const DOWNLOADS_DIR = 'C:\\usdz\\downloads';
 const STATE_FILE = 'C:\\usdz\\download-state.json';
-const TIMEOUT_VIEWER = 15000;
 const TIMEOUT_DOWNLOAD = 30000;
 const TIMEOUT_FILE_APPEAR = 20000;
 
@@ -46,18 +45,24 @@ async function waitForFile(filename, timeout = TIMEOUT_FILE_APPEAR) {
 }
 
 async function getItemCount(page) {
-  const count = await page.evaluate(() => {
-    return document.querySelectorAll('[role="listitem"]').length;
-  });
-  return count;
+  const count = await page.locator('role=button[name="View model"]').count();
+  return Math.ceil(count / 4);
 }
 
-async function openItemViewer(page, buttonIndex) {
-  const buttons = await page.locator('role=button[name="View model"]').all();
-  if (buttonIndex >= buttons.length) {
-    throw new Error(`Button index ${buttonIndex} >= ${buttons.length}`);
+async function openItemViewer(page, itemIdx, assetIdx) {
+  const buttonIndex = itemIdx * 4 + assetIdx;
+  let buttons = await page.locator('role=button[name="View model"]').all();
+
+  if (buttons.length === 0) {
+    throw new Error('No View model buttons found on page');
   }
-  await buttons[buttonIndex].click();
+
+  if (buttonIndex >= buttons.length) {
+    throw new Error(`Button ${buttonIndex} >= ${buttons.length} available`);
+  }
+
+  const btn = buttons[buttonIndex];
+  await btn.click();
   await page.waitForTimeout(2500);
 }
 
@@ -152,7 +157,7 @@ async function downloadAllAssets(context) {
       await page.waitForLoadState('networkidle');
     }
 
-    await page.waitForSelector('[role="listitem"]', { timeout: 30000 });
+    await page.waitForSelector('role=button[name="View model"]', { timeout: 30000 });
     await page.waitForTimeout(2000);
 
     const totalItems = await getItemCount(page);
@@ -173,7 +178,7 @@ async function downloadAllAssets(context) {
           console.log(`  Asset ${assetIdx + 1}/4...`);
 
           const buttonIndex = itemIdx * 4 + assetIdx;
-          await openItemViewer(page, buttonIndex);
+          await openItemViewer(page, itemIdx, assetIdx);
           await selectUSDZFormat(page);
 
           const filename = await downloadFile(page, `asset_${itemIdx}_${assetIdx}`);
@@ -197,8 +202,14 @@ async function downloadAllAssets(context) {
 
       } catch (err) {
         console.error(`  ERROR on item ${itemIdx}: ${err.message}`);
+        console.error(`  Skipping item ${itemIdx} and continuing...`);
+        state.currentItemIndex = itemIdx + 1;
         saveState(state);
-        throw err;
+        try {
+          await closeViewer(page);
+        } catch (closeErr) {
+          console.warn(`Could not close viewer after error: ${closeErr.message}`);
+        }
       }
     }
 
