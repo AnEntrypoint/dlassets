@@ -6,6 +6,7 @@ const DOWNLOADS_DIR = 'C:\\usdz\\downloads';
 const STATE_FILE = 'C:\\usdz\\download-state.json';
 const TIMEOUT_DOWNLOAD = 30000;
 const TIMEOUT_FILE_APPEAR = 20000;
+const DELAY_BETWEEN_ITEMS = 3000;
 
 function loadState() {
   if (fs.existsSync(STATE_FILE)) {
@@ -44,6 +45,20 @@ async function waitForFile(filename, timeout = TIMEOUT_FILE_APPEAR) {
   return false;
 }
 
+async function waitForPageReady(page, maxWait = 30000) {
+  const startTime = Date.now();
+  while (Date.now() - startTime < maxWait) {
+    const loading = await page.locator('[class*="loading"], [class*="spinner"]').count();
+    const buttons = await page.locator('role=button[name="View model"]').count();
+    
+    if (loading <= 4 && buttons > 0) {
+      return true;
+    }
+    await page.waitForTimeout(1000);
+  }
+  return false;
+}
+
 async function getItemCount(page) {
   const count = await page.locator('role=button[name="View model"]').count();
   return Math.ceil(count / 4);
@@ -51,6 +66,7 @@ async function getItemCount(page) {
 
 async function openItemViewer(page, itemIdx, assetIdx) {
   const buttonIndex = itemIdx * 4 + assetIdx;
+  
   let buttons = await page.locator('role=button[name="View model"]').all();
 
   if (buttons.length === 0) {
@@ -139,6 +155,62 @@ async function closeViewer(page) {
   }
 }
 
+async function recoverPageStability(page) {
+  try {
+    console.log('  [Recover] Waiting for loading indicators...');
+    
+    // Wait for loading to complete
+    let attempts = 0;
+    while (attempts < 15) {
+      const loading = await page.locator('[class*="loading"], [class*="spinner"]').count();
+      if (loading <= 4) {
+        break;
+      }
+      await page.waitForTimeout(1000);
+      attempts++;
+    }
+    
+    // Reset scroll position
+    await page.evaluate(() => window.scrollTo(0, 0));
+    await page.waitForTimeout(500);
+    
+    // Scroll to assets
+    await page.evaluate(() => window.scrollBy(0, 1000));
+    await page.waitForTimeout(500);
+    
+    // Check for buttons
+    const buttonCount = await page.locator('role=button[name="View model"]').count();
+    console.log(`  [Recover] Buttons found: ${buttonCount}`);
+    
+    if (buttonCount > 0) {
+      return true;
+    }
+    
+    // Full navigation recovery
+    console.log('  [Recover] Full page navigation...');
+    await page.goto(HUNYUAN_URL, { waitUntil: 'domcontentloaded', timeout: 30000 });
+    
+    // Wait for loading again
+    for (let i = 0; i < 15; i++) {
+      const loading = await page.locator('[class*="loading"], [class*="spinner"]').count();
+      if (loading <= 4) break;
+      await page.waitForTimeout(1000);
+    }
+    
+    // Scroll to assets
+    await page.evaluate(() => window.scrollBy(0, 1000));
+    await page.waitForTimeout(500);
+    
+    const finalCount = await page.locator('role=button[name="View model"]').count();
+    console.log(`  [Recover] After navigation: ${finalCount} buttons`);
+    
+    return finalCount > 0;
+  } catch (err) {
+    console.error(`  [Recover] Failed: ${err.message}`);
+    return false;
+  }
+}
+
 async function downloadAllAssets(context) {
   if (!fs.existsSync(DOWNLOADS_DIR)) {
     fs.mkdirSync(DOWNLOADS_DIR, { recursive: true });
@@ -154,13 +226,15 @@ async function downloadAllAssets(context) {
     if (!page || page.isClosed()) {
       page = await context.newPage();
       await page.goto(HUNYUAN_URL, { waitUntil: 'domcontentloaded', timeout: 30000 });
-      await page.waitForLoadState('networkidle');
     }
 
-    await page.waitForSelector('role=button[name="View model"]', { timeout: 30000 });
-    await page.waitForTimeout(2000);
+    console.log('Waiting for page to be ready...');
+    const isReady = await waitForPageReady(page);
+    if (!isReady) {
+      throw new Error('Page failed to load');
+    }
 
-    const totalItems = await getItemCount(page);
+    let totalItems = await getItemCount(page);
     console.log(`\nTotal items found: ${totalItems}`);
     console.log(`Resuming from item ${state.currentItemIndex}/${totalItems}`);
 
@@ -177,7 +251,16 @@ async function downloadAllAssets(context) {
         for (let assetIdx = 0; assetIdx < 4; assetIdx++) {
           console.log(`  Asset ${assetIdx + 1}/4...`);
 
-          const buttonIndex = itemIdx * 4 + assetIdx;
+          // Verify page is ready before each asset
+          const buttonCount = await page.locator('role=button[name="View model"]').count();
+          if (buttonCount === 0) {
+            console.log(`  Buttons missing, recovering...`);
+            const recovered = await recoverPageStability(page);
+            if (!recovered) {
+              throw new Error('Failed to recover page for asset click');
+            }
+          }
+
           await openItemViewer(page, itemIdx, assetIdx);
           await selectUSDZFormat(page);
 
@@ -198,7 +281,16 @@ async function downloadAllAssets(context) {
 
         console.log(`  Item ${itemIdx + 1} COMPLETE (4 assets)`);
         await closeViewer(page);
-        await page.waitForTimeout(1000);
+        
+        // Recover page for next item
+        if (itemIdx < totalItems - 1) {
+          console.log(`  Preparing for next item...`);
+          const recovered = await recoverPageStability(page);
+          if (recovered) {
+            console.log(`  Delay before next item...`);
+            await page.waitForTimeout(DELAY_BETWEEN_ITEMS);
+          }
+        }
 
       } catch (err) {
         console.error(`  ERROR on item ${itemIdx}: ${err.message}`);
@@ -207,8 +299,9 @@ async function downloadAllAssets(context) {
         saveState(state);
         try {
           await closeViewer(page);
-        } catch (closeErr) {
-          console.warn(`Could not close viewer after error: ${closeErr.message}`);
+          await recoverPageStability(page);
+        } catch (recoveryErr) {
+          console.warn(`Recovery attempt failed: ${recoveryErr.message}`);
         }
       }
     }
