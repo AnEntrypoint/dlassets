@@ -1,13 +1,13 @@
 import bpy, sys, os, glob
 
 script_dir = os.path.dirname(os.path.abspath(__file__))
-input_dir = os.path.join(script_dir, "input")
+downloads_dir = os.path.join(script_dir, "downloads")
 output_dir = os.path.join(script_dir, "output")
 os.makedirs(output_dir, exist_ok=True)
 
-usdz_files = glob.glob(os.path.join(input_dir, "*.usdz"))
+usdz_files = glob.glob(os.path.join(downloads_dir, "*.usdz"))
 if not usdz_files:
-    print("No .usdz files found in input/")
+    print("No .usdz files found in downloads/")
     sys.exit(1)
 
 for usdz_path in usdz_files:
