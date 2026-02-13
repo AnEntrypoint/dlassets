@@ -1,9 +1,0 @@
-[2026-02-13T10:50:11.958Z] START: Comprehensive USDZ Downloader Test Suite
-[2026-02-13T10:50:11.960Z] START: Working directory: C:\usdz
-[2026-02-13T10:50:11.961Z] PHASE1: === PHASE 1: PAGE INSPECTION AND VERIFICATION ===
-[2026-02-13T10:50:11.961Z] PHASE1: Navigating to https://3d.hunyuan.tencent.com/assets
-[2026-02-13T10:50:15.160Z] PHASE1: Page loaded
-[2026-02-13T10:50:18.291Z] PHASE1: Screenshot saved: phase1-page-load.png
-[2026-02-13T10:50:18.315Z] PHASE1: Found 0 listitem elements
-[2026-02-13T10:50:18.315Z] PHASE1: ERROR: No listitems found. Page may not have loaded properly.
-[2026-02-13T10:50:18.315Z] START: PHASE 1 FAILED: Cannot continue without valid page structure
