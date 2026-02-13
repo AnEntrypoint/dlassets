@@ -99,16 +99,29 @@ class HunyuanDownloader {
   async navigateToAssets() {
     console.log('[Nav] Going to assets page...');
     await this.page.goto(WEBSITE_URL, { waitUntil: 'domcontentloaded' });
+    await this.page.waitForLoadState('networkidle', { timeout: 25000 }).catch(() => {
+      // Network idle timeout is normal for SPAs, continue anyway
+    });
     await this.waitForListItems();
   }
 
-  async waitForListItems(timeout = 15000) {
+  async waitForListItems(timeout = 30000) {
+    console.log('[Load] Waiting for list items to render (React dynamic load)...');
     const start = Date.now();
+    let lastCount = 0;
+
     while (Date.now() - start < timeout) {
       const count = await this.page.locator('role=listitem').count();
-      if (count > 0) return count;
+      if (count > 0) {
+        const elapsed = Date.now() - start;
+        console.log(`[Load] ✓ Found ${count} items after ${elapsed}ms`);
+        return count;
+      }
+      lastCount = count;
       await this.page.waitForTimeout(500);
     }
+
+    console.log(`[Load] ✗ Timeout after ${timeout}ms, last count: ${lastCount}`);
     return 0;
   }
 
@@ -129,61 +142,120 @@ class HunyuanDownloader {
 
   async deleteFirstItem() {
     const items = await this.page.locator('role=listitem').all();
-    if (items.length === 0) return false;
-
-    const firstItem = items[0];
-    await firstItem.hover();
-    await this.page.waitForTimeout(300);
-
-    const buttons = await firstItem.locator('role=button').all();
-    if (buttons.length < 5) return false;
-
-    const deleteBtn = buttons[4];
-    const html = await deleteBtn.innerHTML().catch(() => '');
-    if (!html.includes('t-icon-delete')) return false;
-
-    await deleteBtn.click();
-    await this.page.waitForTimeout(500);
-
-    const confirmBtn = this.page.locator('role=button[name="Confirm deletion"], button:has-text("Confirm")');
-    for (let i = 0; i < 15; i++) {
-      if (await confirmBtn.count() > 0) break;
-      await this.page.waitForTimeout(200);
-    }
-
-    if (await confirmBtn.count() === 0) return false;
-
-    await confirmBtn.click();
-    await this.page.waitForTimeout(1000);
-    return true;
-  }
-
-  async downloadAsset(item, index) {
-    const viewButtons = await item.locator('role=button[name="View model"], role=button[name="查看模型"]').all();
-    if (index >= viewButtons.length) return false;
-
-    await viewButtons[index].click();
-    await this.page.waitForTimeout(2000);
-
-    await this.selectUSDZFormat();
-
-    const downloadBtn = this.page.locator('role=button[name="download"], button:has-text("Download")').first();
-    if (await downloadBtn.count() === 0) {
-      await this.closeViewerModal();
+    if (items.length === 0) {
+      console.log('[Delete] No items to delete');
       return false;
     }
 
-    const [download] = await Promise.all([
-      this.page.waitForEvent('download', { timeout: 30000 }),
-      downloadBtn.click()
-    ]);
+    const firstItem = items[0];
+    console.log('[Delete] Hovering over first item...');
+    await firstItem.hover();
+    await this.page.waitForTimeout(500);
 
-    const filename = download.suggestedFilename() || `model-${Date.now()}.usdz`;
-    const filepath = path.join(DOWNLOADS_DIR, filename);
-    await download.saveAs(filepath);
+    const deleteBtn = await firstItem.locator('button[class*="delete"]').first();
+    if (await deleteBtn.count() === 0) {
+      console.log('[Delete] Delete button not found');
+      return false;
+    }
 
-    await this.closeViewerModal();
-    return fs.existsSync(filepath) && fs.statSync(filepath).size > 0;
+    console.log('[Delete] Clicking delete button...');
+    await deleteBtn.click();
+    await this.page.waitForTimeout(800);
+
+    console.log('[Delete] Waiting for confirmation dialog...');
+    const confirmBtn = this.page.locator('button:has-text("Confirm"), button:has-text("确认"), button:has-text("删除")').first();
+
+    for (let i = 0; i < 20; i++) {
+      if (await confirmBtn.count() > 0) {
+        console.log(`[Delete] Confirmation button found after ${i * 100}ms`);
+        break;
+      }
+      await this.page.waitForTimeout(100);
+    }
+
+    if (await confirmBtn.count() === 0) {
+      console.log('[Delete] Confirmation button never appeared');
+      return false;
+    }
+
+    console.log('[Delete] Clicking confirmation button...');
+    await confirmBtn.click();
+    await this.page.waitForTimeout(1500);
+
+    const itemsAfterDelete = await this.page.locator('role=listitem').count();
+    const deleted = itemsAfterDelete < items.length;
+    console.log(`[Delete] ${deleted ? 'Success' : 'Failed'} - Items before: ${items.length}, after: ${itemsAfterDelete}`);
+
+    return deleted;
+  }
+
+  async downloadAsset(item, index) {
+    try {
+      const viewButtons = await item.locator('button:has-text("查看")').all();
+      if (index >= viewButtons.length) {
+        console.log(`[Asset ${index}] No button at index (have ${viewButtons.length})`);
+        return false;
+      }
+
+      const viewBtn = viewButtons[index];
+      console.log(`[Asset ${index}] Clicking View button...`);
+      await viewBtn.click();
+
+      console.log(`[Asset ${index}] Waiting for viewer to appear (up to 10 seconds)...`);
+      let viewerFound = false;
+      for (let i = 0; i < 10; i++) {
+        const downloadBtn = this.page.locator('button:has-text("download"), button:has-text("Download"), button:has-text("下载")');
+        if (await downloadBtn.count() > 0) {
+          console.log(`[Asset ${index}] Viewer/download button found after ${i}s`);
+          viewerFound = true;
+          break;
+        }
+        await this.page.waitForTimeout(1000);
+      }
+
+      if (!viewerFound) {
+        console.log(`[Asset ${index}] Viewer never appeared - skipping`);
+        await this.closeViewerModal().catch(() => {});
+        return false;
+      }
+
+      await this.selectUSDZFormat();
+      await this.page.waitForTimeout(800);
+
+      const downloadBtn = this.page.locator('button:has-text("download"), button:has-text("Download"), button:has-text("下载")').first();
+      if (await downloadBtn.count() === 0) {
+        console.log(`[Asset ${index}] Download button not found`);
+        await this.closeViewerModal();
+        return false;
+      }
+
+      console.log(`[Asset ${index}] Attempting download...`);
+
+      try {
+        const [download] = await Promise.all([
+          this.page.waitForEvent('download', { timeout: 20000 }),
+          downloadBtn.click()
+        ]);
+
+        const filename = download.suggestedFilename() || `model-${Date.now()}.usdz`;
+        const filepath = path.join(DOWNLOADS_DIR, filename);
+        await download.saveAs(filepath);
+
+        const size = fs.statSync(filepath).size;
+        console.log(`[Asset ${index}] ✓ Downloaded ${size} bytes`);
+
+        await this.closeViewerModal();
+        return size > 0;
+      } catch (downloadErr) {
+        console.log(`[Asset ${index}] Download failed: ${downloadErr.message.substring(0, 60)}`);
+        await this.closeViewerModal();
+        return false;
+      }
+    } catch (e) {
+      console.log(`[Asset ${index}] Error: ${e.message.substring(0, 80)}`);
+      await this.closeViewerModal().catch(() => {});
+      return false;
+    }
   }
 
   async selectUSDZFormat() {
