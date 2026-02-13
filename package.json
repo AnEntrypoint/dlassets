@@ -1,6 +1,17 @@
 {
   "name": "usdz-downloader",
   "version": "1.0.0",
+  "main": "downloader.js",
+  "bin": {
+    "usdz-downloader": "./downloader.js"
+  },
+  "scripts": {
+    "persistent": "node downloader-persistent.js",
+    "apple": "node downloader.js apple",
+    "page": "node downloader.js page",
+    "direct": "node downloader.js direct",
+    "test": "node -e \"const d = require('./downloader.js'); console.log('Load OK')\""
+  },
   "dependencies": {
     "playwright": "^1.40.0"
   }

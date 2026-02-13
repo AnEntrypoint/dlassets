@@ -1,5 +1,6 @@
 downloads/
 download-state.json
+browser-session.json
 node_modules/
 package-lock.json
 *.log
