@@ -8,3 +8,5 @@ package-lock.json
 .prd
 tmp/
 .glootie-stop-verified
+CLAUDE.md
+page-*.png
