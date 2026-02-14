@@ -6,10 +6,8 @@
     "usdz-downloader": "./downloader.js"
   },
   "scripts": {
-    "apple": "node downloader.js apple",
-    "page": "node downloader.js page",
-    "direct": "node downloader.js direct",
-    "test": "node -e \"const d = require('./downloader.js'); console.log('Load OK')\""
+    "start": "node downloader.js",
+    "test": "node -e \"const d = require('./downloader.js'); const c = require('./cache-manager.js'); console.log('✓ Loads OK')\""
   },
   "dependencies": {
     "playwright": "^1.40.0"
