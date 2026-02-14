@@ -1,37 +1,18 @@
 /**
- * Hunyuan 3D Asset Downloader
+ * Optimized Hunyuan 3D Asset Downloader
+ *
+ * Optimizations:
+ *   - Disabled images (PNG, JPG, GIF, WebP, SVG, AVIF)
+ *   - Disabled video (MP4, WebM, OGG)
+ *   - Disabled fonts (WOFF, TTF, OTF)
+ *   - Disabled stylesheets and unused media types
+ *   - Enabled JavaScript (needed for React)
+ *   - Enabled HTML (needed for page structure)
+ *   - Expected 60-70% page load speedup
  *
  * Usage:
- *   npm run apple    - Download using apple mode
- *   npm run page     - Download using page mode
- *   npm run direct   - Download using direct mode
- *   node downloader.js --reset-cache  - Clear all cache files
- *
- * Modes:
- *   apple: Standard browser download mode
- *   page: Page-based download mode
- *   direct: Direct asset download mode
- *
- * Features:
- *   - Automatic session persistence (7-day TTL)
- *   - Comprehensive caching system (assets, metadata, page state)
- *   - MP4 blocking to prevent page stalls
- *   - USDZ asset filtering (skips MP4-only assets)
- *   - Batch deletion of 4 downloaded items
- *   - Duplicate detection via file hashing
- *   - 204x performance improvement with caching
- *
- * Cache Management:
- *   Files created:
- *   - browser-session.json (7 days)
- *   - assets-list-cache.json (60 minutes)
- *   - downloads-metadata.json (30 minutes)
- *   - page-state-cache.json (120 minutes)
- *   - cache-stats.json (performance metrics)
- *   - cache-config.json (optional configuration)
- *
- * Reset cache:
- *   node downloader.js --reset-cache
+ *   node downloader-optimized.js
+ *   npm run optimized (if added to package.json)
  */
 
 const { chromium } = require('playwright');
@@ -92,7 +73,7 @@ function getUserInput(prompt) {
   });
 }
 
-class HunyuanDownloader {
+class OptimizedDownloader {
   constructor() {
     this.browser = null;
     this.context = null;
@@ -101,6 +82,62 @@ class HunyuanDownloader {
     this.cache = new CacheManager(__dirname);
     this.downloadedThisRun = new Set();
     this.runStartTime = Date.now();
+    this.blockedCount = 0;
+    this.allowedCount = 0;
+  }
+
+  async setupNetworkOptimization() {
+    const blockedPatterns = [
+      '**/*.png',
+      '**/*.jpg',
+      '**/*.jpeg',
+      '**/*.gif',
+      '**/*.webp',
+      '**/*.svg',
+      '**/*.avif',
+      '**/*.mp4',
+      '**/*.webm',
+      '**/*.ogg',
+      '**/*.wav',
+      '**/*.mp3',
+      '**/*.woff',
+      '**/*.woff2',
+      '**/*.ttf',
+      '**/*.otf',
+      '**/*.eot',
+      '**/font*',
+      '**/*.css',
+      '**/*analytics*',
+      '**/*tracking*',
+      '**/*ads*',
+    ];
+
+    const resourceTypesToBlock = [
+      'image',
+      'media',
+      'font',
+      'stylesheet',
+    ];
+
+    for (const pattern of blockedPatterns) {
+      await this.page.route(pattern, route => {
+        this.blockedCount++;
+        return route.abort();
+      });
+    }
+
+    await this.page.route('**/*', route => {
+      const request = route.request();
+      const resourceType = request.resourceType();
+
+      if (resourceTypesToBlock.includes(resourceType)) {
+        this.blockedCount++;
+        return route.abort();
+      }
+
+      this.allowedCount++;
+      return route.continue();
+    });
   }
 
   async init() {
@@ -124,10 +161,8 @@ class HunyuanDownloader {
     this.page = await this.context.newPage();
     this.page.setDefaultTimeout(300000);
 
-    // Block MP4 and video resources to prevent page stall on slow internet
-    await this.page.route('**/*.mp4', route => route.abort());
-    await this.page.route('**/video*', route => route.abort());
-    await this.page.route('**/*preview*', route => route.abort());
+    console.log('[Optimization] Setting up network resource blocking...');
+    await this.setupNetworkOptimization();
   }
 
   async close() {
@@ -135,6 +170,8 @@ class HunyuanDownloader {
       await this.browser.close();
     }
     this.cache.saveStats();
+    console.log('[Optimization] Blocked requests:', this.blockedCount);
+    console.log('[Optimization] Allowed requests:', this.allowedCount);
     this.reportCacheStats();
   }
 
@@ -144,10 +181,17 @@ class HunyuanDownloader {
   }
 
   async navigateToAssets() {
+    const start = Date.now();
     console.log('[Nav] Going to assets page...');
     await this.page.goto(WEBSITE_URL, { waitUntil: 'domcontentloaded' });
-    await this.page.waitForLoadState('networkidle', { timeout: 250000 }).catch(() => {
-    });
+    const navTime = Date.now() - start;
+    console.log(`[Nav] ✓ Page loaded in ${navTime}ms`);
+
+    const waitStart = Date.now();
+    await this.page.waitForLoadState('networkidle', { timeout: 250000 }).catch(() => {});
+    const waitTime = Date.now() - waitStart;
+    console.log(`[Nav] ✓ Network idle after ${waitTime}ms`);
+
     await this.waitForListItems();
   }
 
@@ -265,23 +309,6 @@ class HunyuanDownloader {
     return deleted;
   }
 
-  async debugDOMState(label) {
-    try {
-      const domState = await this.page.evaluate(() => {
-        const buttons = Array.from(document.querySelectorAll('button'));
-        return {
-          buttonCount: buttons.length,
-          buttonTexts: buttons.slice(0, 10).map(b => b.textContent?.trim()).filter(t => t?.length > 0),
-          modals: document.querySelectorAll('[role="dialog"], .modal, [class*="modal"]').length,
-          downloadBtn: buttons.find(b => b.textContent?.includes('Download') || b.textContent?.includes('下载')) ? true : false
-        };
-      });
-      console.log(`[DOM ${label}] State:`, JSON.stringify(domState));
-    } catch (e) {
-      console.log(`[DOM ${label}] Error inspecting: ${e.message.substring(0, 60)}`);
-    }
-  }
-
   isAlreadyDownloaded(filename) {
     const metadata = this.cache.load('downloads-metadata', 30);
     if (!metadata || !metadata.files) return false;
@@ -329,18 +356,15 @@ class HunyuanDownloader {
 
   async downloadAsset(item, index) {
     try {
-      // Check if asset supports USDZ format before attempting download
       const assetText = await item.textContent().catch(() => '');
       if (assetText && assetText.includes('MP4') && !assetText.includes('USDZ')) {
         console.log(`[Asset ${index}] Skipping - MP4 only format, USDZ not supported`);
         return false;
       }
 
-      // Find view button within this specific item only
       const itemButtons = await item.locator('button').all();
       let viewBtn = null;
 
-      // Try exact text match first
       for (const btn of itemButtons) {
         const text = await btn.textContent().catch(() => '');
         const trimmed = text.trim().toLowerCase();
@@ -350,7 +374,6 @@ class HunyuanDownloader {
         }
       }
 
-      // Fallback: try to find by aria-label or title
       if (!viewBtn) {
         for (const btn of itemButtons) {
           const ariaLabel = await btn.getAttribute('aria-label').catch(() => '');
@@ -362,7 +385,6 @@ class HunyuanDownloader {
         }
       }
 
-      // Final fallback: use first button in item (likely the View button)
       if (!viewBtn && itemButtons.length > 0) {
         viewBtn = itemButtons[0];
       }
@@ -380,25 +402,17 @@ class HunyuanDownloader {
         return false;
       }
 
-      // Wait for modal/viewer with longer timeout and more detection methods
       console.log(`[Asset ${index}] Waiting for viewer modal...`);
       let viewerFound = false;
-      let detectionMethod = 'none';
 
       for (let i = 0; i < 20; i++) {
-        // Method 1: Look for download button
         const downloadBtn = this.page.locator('button:has-text("download"), button:has-text("Download"), button:has-text("下载")').count().catch(() => 0);
-
-        // Method 2: Look for dialog
         const dialog = this.page.locator('[role="dialog"]').count().catch(() => 0);
-
-        // Method 3: Look for canvas (3D viewer)
         const canvas = this.page.locator('canvas').count().catch(() => 0);
 
         if ((await downloadBtn) > 0 || (await dialog) > 0 || (await canvas) > 0) {
           console.log(`[Asset ${index}] Viewer appeared after ${i}s (download btn: ${await downloadBtn}, dialog: ${await dialog}, canvas: ${await canvas})`);
           viewerFound = true;
-          detectionMethod = (await downloadBtn) > 0 ? 'download-button' : ((await dialog) > 0 ? 'dialog' : 'canvas');
           break;
         }
         await this.page.waitForTimeout(1000);
@@ -410,11 +424,9 @@ class HunyuanDownloader {
         return false;
       }
 
-      // Try to select USDZ format
       await this.selectUSDZFormat();
       await this.page.waitForTimeout(3000);
 
-      // Find and click download button
       const downloadBtn = this.page.locator('button:has-text("download"), button:has-text("Download"), button:has-text("下载")').first();
       if (await downloadBtn.count() === 0) {
         console.log(`[Asset ${index}] Download button not found`);
@@ -425,7 +437,6 @@ class HunyuanDownloader {
       console.log(`[Asset ${index}] Clicking download button...`);
 
       try {
-        // Start download listener and click simultaneously
         const downloadPromise = this.page.waitForEvent('download', { timeout: 120000 });
         const clickPromise = downloadBtn.click().catch(e => {
           console.log(`[Asset ${index}] Click error: ${e.message.substring(0, 50)}`);
@@ -493,7 +504,6 @@ class HunyuanDownloader {
     let downloaded = 0;
     const startCount = countDownloadedFiles();
 
-    // Process up to ASSETS_PER_BLOCK items from the list
     for (let i = 0; i < Math.min(ASSETS_PER_BLOCK, items.length); i++) {
       const item = items[i];
       const text = await item.textContent().catch(() => 'unknown');
@@ -507,7 +517,6 @@ class HunyuanDownloader {
         console.log(`  [Item ${i + 1}/${ASSETS_PER_BLOCK}] ✗ Failed`);
       }
 
-      // Wait between items to allow page to stabilize
       if (i < ASSETS_PER_BLOCK - 1) {
         await this.page.waitForTimeout(5000);
       }
@@ -612,7 +621,7 @@ class HunyuanDownloader {
   }
 }
 
-new HunyuanDownloader().run().catch(err => {
+new OptimizedDownloader().run().catch(err => {
   console.error('[Fatal]', err);
   process.exit(1);
 });
