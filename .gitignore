@@ -11,3 +11,12 @@ tmp/
 CLAUDE.md
 page-*.png
 run-downloader.js
+
+# Diagnostic files
+DELETION-COMPLETION-REPORT.txt
+*.debug.json
+debug-*.js
+debug-*.html
+api-response*.json
+asset-ids*.json
+downloader-fixed.js
