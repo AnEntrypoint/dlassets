@@ -87,6 +87,11 @@ class HunyuanDownloader {
 
     this.page = await this.context.newPage();
     this.page.setDefaultTimeout(300000);
+
+    // Block MP4 and video resources to prevent page stall on slow internet
+    await this.page.route('**/*.mp4', route => route.abort());
+    await this.page.route('**/video*', route => route.abort());
+    await this.page.route('**/*preview*', route => route.abort());
   }
 
   async close() {
@@ -288,6 +293,13 @@ class HunyuanDownloader {
 
   async downloadAsset(item, index) {
     try {
+      // Check if asset supports USDZ format before attempting download
+      const assetText = await item.textContent().catch(() => '');
+      if (assetText && assetText.includes('MP4') && !assetText.includes('USDZ')) {
+        console.log(`[Asset ${index}] Skipping - MP4 only format, USDZ not supported`);
+        return false;
+      }
+
       let viewBtn = null;
       let foundVia = '';
 
@@ -429,14 +441,28 @@ class HunyuanDownloader {
     console.log(`[Block] Downloaded ${actualNew}/${ASSETS_PER_BLOCK} assets`);
 
     if (actualNew >= ASSETS_PER_BLOCK) {
-      console.log('[Block] Deleting item...');
-      const deleted = await this.deleteFirstItem();
-      if (deleted) {
+      console.log('[Block] Deleting group of 4 items...');
+      let deletedCount = 0;
+      for (let i = 0; i < 4; i++) {
+        const deleted = await this.deleteFirstItem();
+        if (!deleted) {
+          console.log(`[Block] Delete stopped at item ${i + 1}`);
+          break;
+        }
+        deletedCount++;
         this.state.processedCount++;
-        saveState(this.state);
-        console.log(`[Block] ✓ Deleted (Total: ${this.state.processedCount})`);
-        return { done: false, downloaded: actualNew };
       }
+      console.log(`[Block] ✓ Deleted ${deletedCount} items (Total: ${this.state.processedCount})`);
+      saveState(this.state);
+
+      if (deletedCount > 0) {
+        console.log('[Block] Reloading page to refresh DOM state...');
+        await this.page.reload({ waitUntil: 'domcontentloaded' });
+        await this.page.waitForTimeout(15000);
+        await this.waitForListItems(30000);
+      }
+
+      return { done: false, downloaded: actualNew };
     }
 
     return { done: true, downloaded: actualNew };
