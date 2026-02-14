@@ -82,7 +82,7 @@ class HunyuanDownloader {
     }
 
     this.page = await this.context.newPage();
-    this.page.setDefaultTimeout(30000);
+    this.page.setDefaultTimeout(300000);
   }
 
   async close() {
@@ -99,13 +99,13 @@ class HunyuanDownloader {
   async navigateToAssets() {
     console.log('[Nav] Going to assets page...');
     await this.page.goto(WEBSITE_URL, { waitUntil: 'domcontentloaded' });
-    await this.page.waitForLoadState('networkidle', { timeout: 25000 }).catch(() => {
+    await this.page.waitForLoadState('networkidle', { timeout: 250000 }).catch(() => {
       // Network idle timeout is normal for SPAs, continue anyway
     });
     await this.waitForListItems();
   }
 
-  async waitForListItems(timeout = 30000) {
+  async waitForListItems(timeout = 300000) {
     console.log('[Load] Waiting for list items to render (React dynamic load)...');
     const start = Date.now();
     let lastCount = 0;
@@ -118,7 +118,7 @@ class HunyuanDownloader {
         return count;
       }
       lastCount = count;
-      await this.page.waitForTimeout(1000);
+      await this.page.waitForTimeout(10000);
     }
 
     console.log(`[Load] ✗ Timeout after ${timeout}ms, last count: ${lastCount}`);
@@ -127,13 +127,13 @@ class HunyuanDownloader {
 
   async retryPageLoadWithBackoff(maxRetries = 5) {
     let attempt = 0;
-    const backoffDelays = [5000, 10000, 20000, 30000, 40000];
+    const backoffDelays = [50000, 100000, 200000, 300000, 400000];
 
     while (attempt < maxRetries) {
       console.log(`[Load] Navigation attempt ${attempt + 1}/${maxRetries}`);
       await this.navigateToAssets();
 
-      const count = await this.waitForListItems(20000);
+      const count = await this.waitForListItems(200000);
       if (count > 0) {
         console.log(`[Load] ✓ Successfully loaded ${count} items`);
         return count;
@@ -168,7 +168,7 @@ class HunyuanDownloader {
     } else {
       await this.page.keyboard.press('Escape');
     }
-    await this.page.waitForTimeout(800);
+    await this.page.waitForTimeout(8000);
   }
 
   async deleteFirstItem() {
@@ -181,7 +181,7 @@ class HunyuanDownloader {
     const firstItem = items[0];
     console.log('[Delete] Hovering over first item...');
     await firstItem.hover();
-    await this.page.waitForTimeout(500);
+    await this.page.waitForTimeout(5000);
 
     const deleteBtn = await firstItem.locator('button[class*="delete"]').first();
     if (await deleteBtn.count() === 0) {
@@ -191,7 +191,7 @@ class HunyuanDownloader {
 
     console.log('[Delete] Clicking delete button...');
     await deleteBtn.click();
-    await this.page.waitForTimeout(800);
+    await this.page.waitForTimeout(8000);
 
     console.log('[Delete] Waiting for confirmation dialog...');
     const confirmBtn = this.page.locator('button:has-text("Confirm"), button:has-text("确认"), button:has-text("删除")').first();
@@ -201,7 +201,7 @@ class HunyuanDownloader {
         console.log(`[Delete] Confirmation button found after ${i * 100}ms`);
         break;
       }
-      await this.page.waitForTimeout(100);
+      await this.page.waitForTimeout(1000);
     }
 
     if (await confirmBtn.count() === 0) {
@@ -211,7 +211,7 @@ class HunyuanDownloader {
 
     console.log('[Delete] Clicking confirmation button...');
     await confirmBtn.click();
-    await this.page.waitForTimeout(1500);
+    await this.page.waitForTimeout(15000);
 
     const itemsAfterDelete = await this.page.locator('role=listitem').count();
     const deleted = itemsAfterDelete < items.length;
@@ -283,7 +283,7 @@ class HunyuanDownloader {
           viewerFound = true;
           break;
         }
-        await this.page.waitForTimeout(1000);
+        await this.page.waitForTimeout(10000);
       }
 
       if (!viewerFound) {
@@ -294,7 +294,7 @@ class HunyuanDownloader {
       }
 
       await this.selectUSDZFormat();
-      await this.page.waitForTimeout(800);
+      await this.page.waitForTimeout(8000);
 
       const downloadBtn = this.page.locator('button:has-text("download"), button:has-text("Download"), button:has-text("下载")').first();
       if (await downloadBtn.count() === 0) {
@@ -307,7 +307,7 @@ class HunyuanDownloader {
 
       try {
         const [download] = await Promise.all([
-          this.page.waitForEvent('download', { timeout: 20000 }),
+          this.page.waitForEvent('download', { timeout: 200000 }),
           downloadBtn.click()
         ]);
 
@@ -337,10 +337,10 @@ class HunyuanDownloader {
       const formatBtn = this.page.locator('role=button').filter({ hasText: /^(OBJ|FBX|STL|USDZ|MP4|GIF)$/ }).first();
       if (await formatBtn.isVisible().catch(() => false)) {
         await formatBtn.click();
-        await this.page.waitForTimeout(500);
+        await this.page.waitForTimeout(5000);
         const usdzOpt = this.page.locator('text=USDZ').first();
         await usdzOpt.click();
-        await this.page.waitForTimeout(500);
+        await this.page.waitForTimeout(5000);
       }
     } catch {
       // Format selection not available
@@ -425,7 +425,7 @@ class HunyuanDownloader {
         totalDownloaded += result.downloaded;
 
         if (result.done) break;
-        await this.page.waitForTimeout(2000);
+        await this.page.waitForTimeout(20000);
       }
 
       console.log('\n[Summary] =========================');

@@ -46,9 +46,9 @@ function reset(mode = 'quick') {
       log('\nStep 3: Re-authenticating with gh...');
       console.log('  Please complete the login process when prompted...');
       try {
-        execSync('gh auth login -h github.com -w', { 
+        execSync('gh auth login -h github.com -w', {
           stdio: 'inherit',
-          timeout: 60000
+          timeout: 600000
         });
         log('  ✓ Authentication complete');
       } catch (e) {

@@ -71,7 +71,7 @@ class HealthCheck {
       execSync('git fetch origin --dry-run', {
         encoding: 'utf-8',
         cwd: process.cwd(),
-        timeout: 15000,
+        timeout: 150000,
         stdio: 'pipe'
       });
       this.checks.push({

@@ -107,9 +107,9 @@ class CredentialDiagnostic {
     console.log('\n5. Checking git operations...');
     
     const operations = [
-      { name: 'fetch', cmd: ['fetch', 'origin', '--dry-run'], timeout: 15000 },
-      { name: 'ls-remote', cmd: ['ls-remote', 'origin', 'HEAD'], timeout: 10000 },
-      { name: 'status', cmd: ['status'], timeout: 5000 }
+      { name: 'fetch', cmd: ['fetch', 'origin', '--dry-run'], timeout: 150000 },
+      { name: 'ls-remote', cmd: ['ls-remote', 'origin', 'HEAD'], timeout: 100000 },
+      { name: 'status', cmd: ['status'], timeout: 50000 }
     ];
 
     for (const op of operations) {
