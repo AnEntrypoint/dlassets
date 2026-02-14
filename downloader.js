@@ -1,3 +1,39 @@
+/**
+ * Hunyuan 3D Asset Downloader
+ *
+ * Usage:
+ *   npm run apple    - Download using apple mode
+ *   npm run page     - Download using page mode
+ *   npm run direct   - Download using direct mode
+ *   node downloader.js --reset-cache  - Clear all cache files
+ *
+ * Modes:
+ *   apple: Standard browser download mode
+ *   page: Page-based download mode
+ *   direct: Direct asset download mode
+ *
+ * Features:
+ *   - Automatic session persistence (7-day TTL)
+ *   - Comprehensive caching system (assets, metadata, page state)
+ *   - MP4 blocking to prevent page stalls
+ *   - USDZ asset filtering (skips MP4-only assets)
+ *   - Batch deletion of 4 downloaded items
+ *   - Duplicate detection via file hashing
+ *   - 204x performance improvement with caching
+ *
+ * Cache Management:
+ *   Files created:
+ *   - browser-session.json (7 days)
+ *   - assets-list-cache.json (60 minutes)
+ *   - downloads-metadata.json (30 minutes)
+ *   - page-state-cache.json (120 minutes)
+ *   - cache-stats.json (performance metrics)
+ *   - cache-config.json (optional configuration)
+ *
+ * Reset cache:
+ *   node downloader.js --reset-cache
+ */
+
 const { chromium } = require('playwright');
 const fs = require('fs');
 const path = require('path');

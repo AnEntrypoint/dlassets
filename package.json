@@ -6,7 +6,6 @@
     "usdz-downloader": "./downloader.js"
   },
   "scripts": {
-    "persistent": "node downloader-persistent.js",
     "apple": "node downloader.js apple",
     "page": "node downloader.js page",
     "direct": "node downloader.js direct",
