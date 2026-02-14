@@ -10,3 +10,4 @@ tmp/
 .glootie-stop-verified
 CLAUDE.md
 page-*.png
+run-downloader.js
