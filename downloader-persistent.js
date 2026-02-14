@@ -118,10 +118,41 @@ class HunyuanDownloader {
         return count;
       }
       lastCount = count;
-      await this.page.waitForTimeout(500);
+      await this.page.waitForTimeout(1000);
     }
 
     console.log(`[Load] ✗ Timeout after ${timeout}ms, last count: ${lastCount}`);
+    return 0;
+  }
+
+  async retryPageLoadWithBackoff(maxRetries = 5) {
+    let attempt = 0;
+    const backoffDelays = [5000, 10000, 20000, 30000, 40000];
+
+    while (attempt < maxRetries) {
+      console.log(`[Load] Navigation attempt ${attempt + 1}/${maxRetries}`);
+      await this.navigateToAssets();
+
+      const count = await this.waitForListItems(20000);
+      if (count > 0) {
+        console.log(`[Load] ✓ Successfully loaded ${count} items`);
+        return count;
+      }
+
+      attempt++;
+      if (attempt < maxRetries) {
+        const delay = backoffDelays[attempt - 1];
+        console.log(`[Load] ⚠ Failed to load items, retrying after ${delay}ms...`);
+
+        // Save and reload session
+        await this.saveSession();
+        await this.page.reload({ waitUntil: 'domcontentloaded' }).catch(() => {});
+
+        await this.page.waitForTimeout(delay);
+      }
+    }
+
+    console.log('[Load] ✗ Failed to load items after all retry attempts');
     return 0;
   }
 
@@ -189,17 +220,59 @@ class HunyuanDownloader {
     return deleted;
   }
 
+  async debugDOMState(label) {
+    try {
+      const domState = await this.page.evaluate(() => {
+        const buttons = Array.from(document.querySelectorAll('button'));
+        return {
+          buttonCount: buttons.length,
+          buttonTexts: buttons.slice(0, 10).map(b => b.textContent?.trim()).filter(t => t?.length > 0),
+          modals: document.querySelectorAll('[role="dialog"], .modal, [class*="modal"]').length,
+          downloadBtn: buttons.find(b => b.textContent?.includes('Download') || b.textContent?.includes('下载')) ? true : false
+        };
+      });
+      console.log(`[DOM ${label}] State:`, JSON.stringify(domState));
+    } catch (e) {
+      console.log(`[DOM ${label}] Error inspecting: ${e.message.substring(0, 60)}`);
+    }
+  }
+
   async downloadAsset(item, index) {
     try {
-      const viewButtons = await item.locator('button:has-text("查看")').all();
-      if (index >= viewButtons.length) {
-        console.log(`[Asset ${index}] No button at index (have ${viewButtons.length})`);
+      // Try multiple button selectors
+      let viewBtn = null;
+      let foundVia = '';
+
+      // Try selector 1: Chinese text
+      let buttons = await item.locator('button').all();
+      for (const btn of buttons) {
+        const text = await btn.textContent().catch(() => '');
+        if (text.includes('查看') || text.includes('View')) {
+          viewBtn = btn;
+          foundVia = 'text match';
+          break;
+        }
+      }
+
+      if (!viewBtn && index < buttons.length) {
+        // Fallback: use button by index
+        viewBtn = buttons[index] || null;
+        foundVia = 'index';
+      }
+
+      if (!viewBtn) {
+        console.log(`[Asset ${index}] No button found (tried ${buttons.length} buttons)`);
+        await this.debugDOMState('noButton');
         return false;
       }
 
-      const viewBtn = viewButtons[index];
-      console.log(`[Asset ${index}] Clicking View button...`);
-      await viewBtn.click();
+      console.log(`[Asset ${index}] Clicking View button (found via ${foundVia})...`);
+      try {
+        await viewBtn.click();
+      } catch (clickErr) {
+        console.log(`[Asset ${index}] Click failed: ${clickErr.message.substring(0, 60)}`);
+        return false;
+      }
 
       console.log(`[Asset ${index}] Waiting for viewer to appear (up to 10 seconds)...`);
       let viewerFound = false;
@@ -215,6 +288,7 @@ class HunyuanDownloader {
 
       if (!viewerFound) {
         console.log(`[Asset ${index}] Viewer never appeared - skipping`);
+        await this.debugDOMState('noViewer');
         await this.closeViewerModal().catch(() => {});
         return false;
       }
@@ -224,7 +298,7 @@ class HunyuanDownloader {
 
       const downloadBtn = this.page.locator('button:has-text("download"), button:has-text("Download"), button:has-text("下载")').first();
       if (await downloadBtn.count() === 0) {
-        console.log(`[Asset ${index}] Download button not found`);
+        console.log(`[Asset ${index}] Download button not found after format selection`);
         await this.closeViewerModal();
         return false;
       }
@@ -321,7 +395,13 @@ class HunyuanDownloader {
     try {
       console.log(`[Init] Downloaded: ${countDownloadedFiles()}, Processed: ${this.state.processedCount}`);
 
-      await this.navigateToAssets();
+      // Use retry logic with exponential backoff
+      const itemsLoaded = await this.retryPageLoadWithBackoff();
+
+      if (itemsLoaded === 0) {
+        console.log('[Init] Failed to load items after all retries - exiting');
+        return;
+      }
 
       const loggedIn = await this.isLoggedIn();
       if (!loggedIn) {
