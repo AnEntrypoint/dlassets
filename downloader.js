@@ -336,31 +336,43 @@ class HunyuanDownloader {
         return false;
       }
 
+      // Find view button within this specific item only
+      const itemButtons = await item.locator('button').all();
       let viewBtn = null;
-      let foundVia = '';
 
-      let buttons = await item.locator('button').all();
-      for (const btn of buttons) {
+      // Try exact text match first
+      for (const btn of itemButtons) {
         const text = await btn.textContent().catch(() => '');
-        if (text.includes('查看') || text.includes('View')) {
+        const trimmed = text.trim().toLowerCase();
+        if (trimmed === '查看' || trimmed === 'view' || text.includes('查看') || text.includes('View')) {
           viewBtn = btn;
-          foundVia = 'text match';
           break;
         }
       }
 
-      if (!viewBtn && index < buttons.length) {
-        viewBtn = buttons[index] || null;
-        foundVia = 'index';
+      // Fallback: try to find by aria-label or title
+      if (!viewBtn) {
+        for (const btn of itemButtons) {
+          const ariaLabel = await btn.getAttribute('aria-label').catch(() => '');
+          const title = await btn.getAttribute('title').catch(() => '');
+          if (ariaLabel?.toLowerCase().includes('view') || title?.toLowerCase().includes('view')) {
+            viewBtn = btn;
+            break;
+          }
+        }
+      }
+
+      // Final fallback: use first button in item (likely the View button)
+      if (!viewBtn && itemButtons.length > 0) {
+        viewBtn = itemButtons[0];
       }
 
       if (!viewBtn) {
-        console.log(`[Asset ${index}] No button found (tried ${buttons.length} buttons)`);
-        await this.debugDOMState('noButton');
+        console.log(`[Asset ${index}] No button found in item`);
         return false;
       }
 
-      console.log(`[Asset ${index}] Clicking View button (found via ${foundVia})...`);
+      console.log(`[Asset ${index}] Clicking View button...`);
       try {
         await viewBtn.click();
       } catch (clickErr) {
@@ -368,46 +380,70 @@ class HunyuanDownloader {
         return false;
       }
 
-      console.log(`[Asset ${index}] Waiting for viewer to appear (up to 10 seconds)...`);
+      // Wait for modal/viewer with longer timeout and more detection methods
+      console.log(`[Asset ${index}] Waiting for viewer modal...`);
       let viewerFound = false;
-      for (let i = 0; i < 10; i++) {
-        const downloadBtn = this.page.locator('button:has-text("download"), button:has-text("Download"), button:has-text("下载")');
-        if (await downloadBtn.count() > 0) {
-          console.log(`[Asset ${index}] Viewer/download button found after ${i}s`);
+      let detectionMethod = 'none';
+
+      for (let i = 0; i < 20; i++) {
+        // Method 1: Look for download button
+        const downloadBtn = this.page.locator('button:has-text("download"), button:has-text("Download"), button:has-text("下载")').count().catch(() => 0);
+
+        // Method 2: Look for dialog
+        const dialog = this.page.locator('[role="dialog"]').count().catch(() => 0);
+
+        // Method 3: Look for canvas (3D viewer)
+        const canvas = this.page.locator('canvas').count().catch(() => 0);
+
+        if ((await downloadBtn) > 0 || (await dialog) > 0 || (await canvas) > 0) {
+          console.log(`[Asset ${index}] Viewer appeared after ${i}s (download btn: ${await downloadBtn}, dialog: ${await dialog}, canvas: ${await canvas})`);
           viewerFound = true;
+          detectionMethod = (await downloadBtn) > 0 ? 'download-button' : ((await dialog) > 0 ? 'dialog' : 'canvas');
           break;
         }
-        await this.page.waitForTimeout(10000);
+        await this.page.waitForTimeout(1000);
       }
 
       if (!viewerFound) {
         console.log(`[Asset ${index}] Viewer never appeared - skipping`);
-        await this.debugDOMState('noViewer');
         await this.closeViewerModal().catch(() => {});
         return false;
       }
 
+      // Try to select USDZ format
       await this.selectUSDZFormat();
-      await this.page.waitForTimeout(8000);
+      await this.page.waitForTimeout(3000);
 
+      // Find and click download button
       const downloadBtn = this.page.locator('button:has-text("download"), button:has-text("Download"), button:has-text("下载")').first();
       if (await downloadBtn.count() === 0) {
-        console.log(`[Asset ${index}] Download button not found after format selection`);
+        console.log(`[Asset ${index}] Download button not found`);
         await this.closeViewerModal();
         return false;
       }
 
-      console.log(`[Asset ${index}] Attempting download...`);
+      console.log(`[Asset ${index}] Clicking download button...`);
 
       try {
-        const [download] = await Promise.all([
-          this.page.waitForEvent('download', { timeout: 200000 }),
-          downloadBtn.click()
-        ]);
+        // Start download listener and click simultaneously
+        const downloadPromise = this.page.waitForEvent('download', { timeout: 120000 });
+        const clickPromise = downloadBtn.click().catch(e => {
+          console.log(`[Asset ${index}] Click error: ${e.message.substring(0, 50)}`);
+          return null;
+        });
+
+        const [download] = await Promise.all([downloadPromise, clickPromise]);
+
+        if (!download) {
+          console.log(`[Asset ${index}] No download received`);
+          await this.closeViewerModal();
+          return false;
+        }
 
         const filename = download.suggestedFilename() || `model-${Date.now()}.usdz`;
 
         if (this.isAlreadyDownloaded(filename)) {
+          console.log(`[Asset ${index}] Already downloaded: ${filename}`);
           return true;
         }
 
@@ -415,7 +451,7 @@ class HunyuanDownloader {
         await download.saveAs(filepath);
 
         const size = fs.statSync(filepath).size;
-        console.log(`[Asset ${index}] ✓ Downloaded ${size} bytes`);
+        console.log(`[Asset ${index}] ✓ Downloaded ${filename} (${size} bytes)`);
 
         await this.updateDownloadMetadata(filename, size);
         this.downloadedThisRun.add(filename);
@@ -423,7 +459,7 @@ class HunyuanDownloader {
         await this.closeViewerModal();
         return size > 0;
       } catch (downloadErr) {
-        console.log(`[Asset ${index}] Download failed: ${downloadErr.message.substring(0, 60)}`);
+        console.log(`[Asset ${index}] Download failed: ${downloadErr.message.substring(0, 80)}`);
         await this.closeViewerModal();
         return false;
       }
@@ -454,20 +490,26 @@ class HunyuanDownloader {
 
     console.log(`\n[Block ${blockNumber}] ${items.length} items remaining`);
 
-    const firstItem = items[0];
-    const text = await firstItem.textContent().catch(() => 'unknown');
-    console.log(`[Block] Processing: ${text?.substring(0, 50)}...`);
-
     let downloaded = 0;
     const startCount = countDownloadedFiles();
 
-    for (let i = 0; i < ASSETS_PER_BLOCK; i++) {
-      const success = await this.downloadAsset(firstItem, i);
+    // Process up to ASSETS_PER_BLOCK items from the list
+    for (let i = 0; i < Math.min(ASSETS_PER_BLOCK, items.length); i++) {
+      const item = items[i];
+      const text = await item.textContent().catch(() => 'unknown');
+      console.log(`[Block] Item ${i + 1}: ${text?.substring(0, 60)}...`);
+
+      const success = await this.downloadAsset(item, i);
       if (success) {
         downloaded++;
-        console.log(`  [Asset ${i + 1}/${ASSETS_PER_BLOCK}] ✓ Downloaded`);
+        console.log(`  [Item ${i + 1}/${ASSETS_PER_BLOCK}] ✓ Downloaded`);
       } else {
-        console.log(`  [Asset ${i + 1}/${ASSETS_PER_BLOCK}] ✗ Failed`);
+        console.log(`  [Item ${i + 1}/${ASSETS_PER_BLOCK}] ✗ Failed`);
+      }
+
+      // Wait between items to allow page to stabilize
+      if (i < ASSETS_PER_BLOCK - 1) {
+        await this.page.waitForTimeout(5000);
       }
     }
 
