@@ -8,7 +8,9 @@
   },
   "scripts": {
     "start": "node downloader.js",
-    "download": "node downloader.js"
+    "download": "node downloader.js",
+    "convert": "node -e \"const c = require('./converter'); new c().convert('usdz', 'glb').then(r => console.log('Converted:', r.converted, 'files'))\"",
+    "download-and-convert": "node downloader.js --convert"
   },
   "dependencies": {
     "playwright": "^1.40.0"

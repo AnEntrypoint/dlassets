@@ -20,6 +20,7 @@ const fs = require('fs');
 const path = require('path');
 const readline = require('readline');
 const CacheManager = require('./cache-manager');
+const AssetConverter = require('./converter');
 
 const DOWNLOADS_DIR = path.join(__dirname, 'downloads');
 const STATE_FILE = path.join(__dirname, 'download-state.json');
@@ -571,6 +572,30 @@ class OptimizedDownloader {
     console.log('[Cache] =========================\n');
   }
 
+  async convertDownloadedAssets() {
+    console.log('\n[Converter] Starting USDZ to GLB conversion...');
+    try {
+      const converter = new AssetConverter({
+        verbose: true,
+      });
+
+      const result = await converter.convert('usdz', 'glb');
+
+      console.log(`[Converter] Successfully converted ${result.converted} USDZ files to GLB`);
+      if (result.files.length > 0) {
+        console.log('[Converter] Converted files:');
+        result.files.forEach(f => {
+          console.log(`  ✓ ${f.filename} (${f.sizeMB}MB)`);
+        });
+      }
+
+      return result;
+    } catch (err) {
+      console.error(`[Converter] Error: ${err.message}`);
+      return { converted: 0, files: [], error: err.message };
+    }
+  }
+
   async run() {
     await this.init();
 
@@ -621,7 +646,22 @@ class OptimizedDownloader {
   }
 }
 
-new OptimizedDownloader().run().catch(err => {
-  console.error('[Fatal]', err);
-  process.exit(1);
-});
+async function main() {
+  const args = process.argv.slice(2);
+  const shouldConvert = args.includes('--convert');
+
+  const downloader = new OptimizedDownloader();
+  await downloader.run().catch(err => {
+    console.error('[Fatal]', err);
+    process.exit(1);
+  });
+
+  if (shouldConvert) {
+    await downloader.convertDownloadedAssets().catch(err => {
+      console.error('[Fatal] Conversion failed:', err);
+      process.exit(1);
+    });
+  }
+}
+
+main();
