@@ -1,0 +1,30 @@
+{
+  "/static/css/main.a1b2c3d4.css": {
+    "url": "https://3d.hunyuan.tencent.com/static/css/main.a1b2c3d4.css",
+    "contentType": "stylesheet",
+    "content": "body { margin: 0; } .app { display: flex; }",
+    "timestamp": 1771151700855,
+    "size": 43
+  },
+  "/static/js/react.def56789.js": {
+    "url": "https://3d.hunyuan.tencent.com/static/js/react.def56789.js",
+    "contentType": "script",
+    "content": "const React = { createElement: () => {} };",
+    "timestamp": 1771151700856,
+    "size": 42
+  },
+  "/static/js/app.9xyz.js": {
+    "url": "https://3d.hunyuan.tencent.com/static/js/app.9xyz.js",
+    "contentType": "script",
+    "content": "function App() { return <div>Asset List</div>; }",
+    "timestamp": 1771151700858,
+    "size": 48
+  },
+  "/static/css/theme.xyz99.css": {
+    "url": "https://3d.hunyuan.tencent.com/static/css/theme.xyz99.css",
+    "contentType": "stylesheet",
+    "content": "button { padding: 10px; background: blue; }",
+    "timestamp": 1771151700859,
+    "size": 43
+  }
+}
