@@ -8,12 +8,7 @@
   },
   "scripts": {
     "start": "node downloader.js",
-    "download": "node downloader.js",
-    "complete": "node download-all-versions.js",
-    "complete-assets": "node download-all-versions.js",
-    "convert": "node -e \"const c = require('./converter'); new c().convert('usdz', 'glb').then(r => console.log('Converted:', r.converted, 'files'))\"",
-    "download-and-convert": "node downloader.js --convert",
-    "cleanup": "node do-cleanup.js"
+    "download": "node downloader.js"
   },
   "dependencies": {
     "playwright": "^1.40.0"
