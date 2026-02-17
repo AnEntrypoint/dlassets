@@ -11,7 +11,9 @@ tmp/
 CLAUDE.md
 page-*.png
 run-downloader.js
-
+*.usdz
+*.glb
+downloads/
 # Diagnostic files
 DELETION-COMPLETION-REPORT.txt
 *.debug.json
