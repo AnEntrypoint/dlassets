@@ -525,7 +525,7 @@ class OptimizedDownloader {
         await new Promise((resolve, reject) => {
           const proc = spawn('npx', [
             'gltf-transform', 'optimize', srcPath, tmpPath,
-            '--compress', 'draco', '--texture-compress', 'false',
+            '--compress', 'draco', '--texture-compress', 'false', '--weld', 'true',
           ], { stdio: ['ignore', 'pipe', 'pipe'], shell: true });
           proc.stdout.on('data', d => { if (process.env.DEBUG_CONVERT) process.stdout.write(d); });
           proc.stderr.on('data', d => { if (process.env.DEBUG_CONVERT) process.stderr.write(d); });
