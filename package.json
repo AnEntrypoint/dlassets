@@ -11,6 +11,8 @@
     "download": "node downloader.js"
   },
   "dependencies": {
-    "playwright": "^1.40.0"
+    "@gltf-transform/cli": "^4.3.0",
+    "playwright": "^1.40.0",
+    "sharp": "^0.34.5"
   }
 }

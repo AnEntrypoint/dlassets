@@ -513,78 +513,54 @@ class OptimizedDownloader {
       return;
     }
 
-    console.log(`\n[Convert] Converting ${glbFiles.length} GLB file(s) with Draco compression...`);
+    console.log(`\n[Convert] Converting ${glbFiles.length} GLB file(s) with Draco + WebP quality 15...`);
 
-    const filesList = glbFiles
-      .map(f => `"${path.join(DOWNLOADS_DIR, f).replace(/\\/g, '\\\\')}"`)
-      .join(', ');
-
-    const outputDirEscaped = convertedDir.replace(/\\/g, '\\\\');
-
-    const pythonScript = `import bpy, os
-output_dir = "${outputDirEscaped}"
-os.makedirs(output_dir, exist_ok=True)
-glb_files = [${filesList}]
-for glb_path in glb_files:
-    name = os.path.basename(glb_path)
-    out_path = os.path.join(output_dir, name)
-    try:
-        bpy.ops.wm.read_factory_settings(use_empty=True)
-        bpy.ops.import_scene.gltf(filepath=glb_path)
-        bpy.ops.export_scene.gltf(
-            filepath=out_path,
-            export_format='GLB',
-            export_image_format='AUTO',
-            export_draco_mesh_compression_enable=True,
-            export_draco_mesh_compression_level=6,
-        )
-        print(f"DONE: {out_path}")
-    except Exception as e:
-        print(f"ERROR {glb_path}: {str(e)}")
-`;
-
-    const tempScript = path.join(__dirname, 'convert-glb-temp.py');
-    fs.writeFileSync(tempScript, pythonScript);
-
-    try {
-      await new Promise((resolve, reject) => {
-        const blender = 'C:\\Program Files\\Blender Foundation\\Blender 5.0\\blender.exe';
-        const proc = spawn(blender, ['--background', '--python', tempScript], {
-          stdio: ['ignore', 'pipe', 'pipe'],
+    let movedCount = 0;
+    for (const f of glbFiles) {
+      const srcPath = path.join(DOWNLOADS_DIR, f);
+      const outPath = path.join(convertedDir, f);
+      const tmpPath = path.join(convertedDir, f + '.tmp.glb');
+      console.log(`  [Convert] ${f}...`);
+      try {
+        await new Promise((resolve, reject) => {
+          const proc = spawn('npx', [
+            'gltf-transform', 'optimize', srcPath, tmpPath,
+            '--compress', 'draco', '--texture-compress', 'false',
+          ], { stdio: ['ignore', 'pipe', 'pipe'], shell: true });
+          proc.stdout.on('data', d => { if (process.env.DEBUG_CONVERT) process.stdout.write(d); });
+          proc.stderr.on('data', d => { if (process.env.DEBUG_CONVERT) process.stderr.write(d); });
+          const timer = setTimeout(() => { proc.kill(); reject(new Error('optimize timeout')); }, 5 * 60 * 1000);
+          proc.on('close', code => { clearTimeout(timer); code === 0 ? resolve() : reject(new Error(`optimize exit ${code}`)); });
+          proc.on('error', err => { clearTimeout(timer); reject(err); });
         });
 
-        proc.stdout.on('data', d => {
-          const t = d.toString().trim();
-          if (t) console.log(`  [Blender] ${t}`);
-        });
-        proc.stderr.on('data', d => {
-          const t = d.toString().trim();
-          if (t) console.log(`  [Blender] ${t}`);
+        await new Promise((resolve, reject) => {
+          const proc = spawn('npx', [
+            'gltf-transform', 'webp', tmpPath, outPath,
+            '--quality', '15',
+          ], { stdio: ['ignore', 'pipe', 'pipe'], shell: true });
+          proc.stdout.on('data', d => { if (process.env.DEBUG_CONVERT) process.stdout.write(d); });
+          proc.stderr.on('data', d => { if (process.env.DEBUG_CONVERT) process.stderr.write(d); });
+          const timer = setTimeout(() => { proc.kill(); reject(new Error('webp timeout')); }, 5 * 60 * 1000);
+          proc.on('close', code => { clearTimeout(timer); code === 0 ? resolve() : reject(new Error(`webp exit ${code}`)); });
+          proc.on('error', err => { clearTimeout(timer); reject(err); });
         });
 
-        const timer = setTimeout(() => { proc.kill(); reject(new Error('Blender timeout')); }, 10 * 60 * 1000);
-        proc.on('close', code => {
-          clearTimeout(timer);
-          resolve();
-        });
-        proc.on('error', err => { clearTimeout(timer); reject(err); });
-      });
+        if (fs.existsSync(tmpPath)) fs.unlinkSync(tmpPath);
 
-      let movedCount = 0;
-      for (const f of glbFiles) {
-        const convertedPath = path.join(convertedDir, f);
-        const sourcePath = path.join(DOWNLOADS_DIR, f);
-        if (fs.existsSync(convertedPath) && fs.existsSync(sourcePath)) {
-          fs.unlinkSync(sourcePath);
-          movedCount++;
-        }
+        const sizeIn = fs.statSync(srcPath).size;
+        const sizeOut = fs.statSync(outPath).size;
+        console.log(`  [Convert] ✓ ${f} (${(sizeIn/1024/1024).toFixed(1)} MB → ${(sizeOut/1024/1024).toFixed(1)} MB)`);
+        fs.unlinkSync(srcPath);
+        movedCount++;
+      } catch (err) {
+        console.log(`  [Convert] ✗ ${f}: ${err.message}`);
+        if (fs.existsSync(tmpPath)) fs.unlinkSync(tmpPath);
       }
-
-      const done = fs.readdirSync(convertedDir).filter(f => f.endsWith('.glb'));
-      console.log(`[Convert] Done — ${done.length} file(s) in converted/, ${movedCount} source(s) removed from downloads/`);
-    } finally {
-      if (fs.existsSync(tempScript)) fs.unlinkSync(tempScript);
     }
+
+    const done = fs.readdirSync(convertedDir).filter(f => f.endsWith('.glb'));
+    console.log(`[Convert] Done — ${done.length} file(s) in converted/, ${movedCount} source(s) removed from downloads/`);
   }
 
   async run() {
