@@ -147,13 +147,32 @@ class OptimizedDownloader {
         }
       }
 
-      // Block telemetry by domain
-      if (url.includes('galileotelemetry') || url.includes('beacon') || url.includes('umeng')) {
+      // Block telemetry and A/B testing domains
+      const blockedDomains = [
+        'galileotelemetry', 'beacon', 'umeng',
+        'h.trace.qq.com', 'data.ab.qq.com', 'config.ab.qq.com',
+      ];
+      if (blockedDomains.some(d => url.includes(d))) {
+        this.blockedCount++;
+        return route.abort();
+      }
+
+      // Block non-essential API calls (don't affect asset list rendering)
+      const blockedApiPaths = [
+        '/api/3d/quotainfo',
+        '/api/3d/workflow/action/templates',
+        '/api/3d/share',
+        '/api/3d/notice/list',
+      ];
+      if (blockedApiPaths.some(p => url.includes(p))) {
         this.blockedCount++;
         return route.abort();
       }
 
       this.allowedCount++;
+      if (process.env.DEBUG_REQUESTS) {
+        console.log(`  [ALLOW] [${resourceType}] ${url.substring(0, 120)}`);
+      }
       return route.continue();
     });
 
@@ -281,22 +300,275 @@ class OptimizedDownloader {
     return 0;
   }
 
+  async fetchAssetList() {
+    console.log('[API] Registering asset list interceptor...');
+    return new Promise((resolve) => {
+      let resolved = false;
+
+      // Formats we want to download (skip preview images and redundant files)
+      const WANTED_FORMATS = new Set(['glb', 'usdz', 'obj', 'fbx']);
+
+      const parseBody = (text) => {
+        // Try full JSON parse
+        try {
+          const parsed = JSON.parse(text);
+          // Structure: { totalCount, creations: [{ id, title, result: [{ assetId, status, urlResult }] }] }
+          const list = parsed.creations || parsed.data || [];
+          if (Array.isArray(list) && list.length > 0) {
+            console.log(`[API] ✓ Parsed ${list.length} creations`);
+            return list.map(c => ({
+              id: c.id,
+              title: c.title || c.name || c.id,
+              result: (c.result || []).filter(r => r.status === 'success'),
+            }));
+          }
+        } catch (_) {}
+
+        // Regex fallback for large responses
+        console.log('[API] JSON parse failed, using regex fallback...');
+        const creations = [];
+        // Extract top-level creation ids and titles
+        const creationIds = [...text.matchAll(/"creations"\s*:\s*\[[\s\S]*?"id"\s*:\s*"([^"]+)"/g)];
+        // Simpler: extract all id+title pairs at creation level
+        for (const m of text.matchAll(/"id"\s*:\s*"([^"]+)"[^}]{0,200}?"title"\s*:\s*"([^"]+)"/g)) {
+          // Collect urlResult blocks that follow
+          creations.push({ id: m[1], title: m[2], result: [] });
+        }
+        // Extract all urlResult blocks
+        const urlBlocks = [...text.matchAll(/"urlResult"\s*:\s*(\{[^}]+\})/g)];
+        urlBlocks.forEach((m, i) => {
+          const creation = creations[Math.floor(i / 4)]; // 4 results per creation
+          if (creation) {
+            try {
+              const urls = JSON.parse(m[1]);
+              creation.result.push({ assetId: `r${i}`, urlResult: urls });
+            } catch {}
+          }
+        });
+        if (creations.length > 0) {
+          console.log(`[API] ✓ Regex-extracted ${creations.length} creations`);
+        }
+        return creations;
+      };
+
+      // Use route interception so we buffer the body ourselves before
+      // Playwright's inspector cache can evict it (happens with large responses)
+      this.page.route('**/api/3d/creations/list', async (route) => {
+        try {
+          const response = await route.fetch();
+          const body = await response.body(); // buffered by us, not CDP cache
+          await route.fulfill({ response, body }); // pass through to page unchanged
+          if (resolved) return;
+          const text = body.toString('utf-8');
+          const assets = parseBody(text);
+          if (assets.length > 0) {
+            resolved = true;
+            resolve(assets);
+          }
+        } catch (err) {
+          console.error('[API] Intercept error:', err.message);
+          await route.continue().catch(() => {});
+        }
+      });
+
+      // Timeout after 90s
+      setTimeout(() => {
+        if (!resolved) {
+          resolved = true;
+          console.log('[API] ✗ Timeout waiting for asset list');
+          resolve([]);
+        }
+      }, 90000);
+    });
+  }
+
+  async downloadFile(url, destPath) {
+    const https = require('https');
+    const http = require('http');
+    return new Promise((resolve, reject) => {
+      const proto = url.startsWith('https') ? https : http;
+      const file = fs.createWriteStream(destPath);
+      const req = proto.get(url, { timeout: 120000 }, (res) => {
+        if (res.statusCode === 301 || res.statusCode === 302) {
+          file.close();
+          fs.unlink(destPath, () => {});
+          return this.downloadFile(res.headers.location, destPath).then(resolve).catch(reject);
+        }
+        if (res.statusCode !== 200) {
+          file.close();
+          fs.unlink(destPath, () => {});
+          return reject(new Error(`HTTP ${res.statusCode}`));
+        }
+        res.pipe(file);
+        file.on('finish', () => file.close(() => resolve()));
+        file.on('error', (err) => { fs.unlink(destPath, () => {}); reject(err); });
+      });
+      req.on('error', (err) => { fs.unlink(destPath, () => {}); reject(err); });
+      req.on('timeout', () => { req.destroy(); reject(new Error('Download timeout')); });
+    });
+  }
+
+  async downloadAsset(creation) {
+    const { id, title, result } = creation;
+    // Formats we want to download per result variant
+    // API provides: glb (textured), obj, mtl, geometryGlb, textureGlb — no usdz key exists
+    const WANTED_FORMATS = ['glb'];
+
+    if (!result || result.length === 0) {
+      console.log(`[Download] ✗ "${title}": no completed result variants`);
+      return { success: false, downloaded: [] };
+    }
+
+    const safeName = title.replace(/[^a-z0-9_\-]/gi, '_').toLowerCase();
+    const idShort = id.slice(0, 8);
+    const downloaded = [];
+    let expectedCount = 0;
+
+    console.log(`[Download] "${title}" — ${result.length} variant(s)...`);
+
+    for (let vi = 0; vi < result.length; vi++) {
+      const variant = result[vi];
+      const urls = variant.urlResult || {};
+
+      for (const format of WANTED_FORMATS) {
+        const url = urls[format];
+        if (!url || typeof url !== 'string') continue;
+        expectedCount++;
+
+        const ext = url.split('?')[0].split('.').pop().toLowerCase() || format;
+        const filename = `${safeName}_${idShort}_v${vi + 1}.${ext}`;
+        const destPath = path.join(DOWNLOADS_DIR, filename);
+
+        if (fs.existsSync(destPath)) {
+          const size = fs.statSync(destPath).size;
+          if (size > 5 * 1024 * 1024) {
+            console.log(`  [v${vi + 1}/${format}] ✓ Already exists (${(size / 1024 / 1024).toFixed(1)} MB)`);
+            downloaded.push({ format, filename, size });
+            continue;
+          }
+        }
+
+        try {
+          console.log(`  [v${vi + 1}/${format}] Downloading ${filename}...`);
+          await this.downloadFile(url, destPath);
+          const size = fs.statSync(destPath).size;
+          if (size < 5 * 1024 * 1024) {
+            console.log(`  [v${vi + 1}/${format}] ✗ Too small (${(size / 1024 / 1024).toFixed(1)} MB) - removing`);
+            fs.unlinkSync(destPath);
+          } else {
+            console.log(`  [v${vi + 1}/${format}] ✓ ${(size / 1024 / 1024).toFixed(1)} MB`);
+            downloaded.push({ format, filename, size });
+          }
+        } catch (err) {
+          console.log(`  [v${vi + 1}/${format}] ✗ Failed: ${err.message}`);
+        }
+      }
+    }
+
+    const success = expectedCount > 0 && downloaded.length === expectedCount;
+    return { success, downloaded, expectedCount };
+  }
+
+  async deleteAsset(asset) {
+    const { id, title } = asset;
+    console.log(`[Delete] Deleting "${title}" (${id})...`);
+
+    try {
+      const result = await this.page.evaluate(async (assetId) => {
+        try {
+          const res = await fetch('/api/3d/creations/delete', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ creationsIdList: [assetId] }),
+          });
+          const text = await res.text().catch(() => '');
+          return { ok: res.ok, status: res.status, body: text.substring(0, 200) };
+        } catch (e) {
+          return { ok: false, error: e.message };
+        }
+      }, id);
+
+      if (result.ok) {
+        console.log(`[Delete] ✓ "${title}" deleted (HTTP ${result.status})`);
+        return true;
+      } else {
+        const detail = result.error || `HTTP ${result.status}: ${result.body}`;
+        console.log(`[Delete] ✗ "${title}" failed: ${detail}`);
+        return false;
+      }
+    } catch (err) {
+      console.log(`[Delete] ✗ Error: ${err.message}`);
+      return false;
+    }
+  }
+
   async run() {
     try {
       await this.init();
       console.log('\n[START] Asset download workflow started\n');
+
+      if (!fs.existsSync(DOWNLOADS_DIR)) {
+        fs.mkdirSync(DOWNLOADS_DIR, { recursive: true });
+      }
+
+      // Start fetching asset list (captures the API response triggered by navigation)
+      const assetListPromise = this.fetchAssetList();
 
       await this.navigateToAssets();
       const itemCount = await this.waitForListItems();
 
       if (itemCount === 0) {
         console.log('[INFO] No assets available on account');
-        console.log('[INFO] Account shows 0 remaining assets');
-      } else {
-        console.log(`\n[INFO] Found ${itemCount} assets available for download`);
+        await this.saveSession();
+        return;
+      }
+
+      console.log(`\n[INFO] Found ${itemCount} assets, waiting for API data...`);
+      const assets = await assetListPromise;
+
+      if (assets.length === 0) {
+        console.log('[ERROR] Could not retrieve asset data from API');
+        await this.saveSession();
+        return;
+      }
+
+      console.log(`\n[INFO] Processing ${assets.length} assets...\n`);
+
+      let totalDownloaded = 0;
+      let totalDeleted = 0;
+
+      for (let i = 0; i < assets.length; i++) {
+        const asset = assets[i];
+        console.log(`\n[${i + 1}/${assets.length}] "${asset.title}" (${asset.result.length} variants)`);
+
+        const { success, downloaded, expectedCount } = await this.downloadAsset(asset);
+
+        if (success && downloaded.length > 0) {
+          totalDownloaded += downloaded.length;
+          console.log(`[${i + 1}/${assets.length}] ✓ All ${downloaded.length} files downloaded — deleting from server`);
+
+          const deleted = await this.deleteAsset(asset);
+          if (deleted) totalDeleted++;
+
+          this.state.processedCount++;
+          saveState(this.state);
+        } else if (downloaded.length > 0) {
+          console.log(`[${i + 1}/${assets.length}] ⚠ Partial (${downloaded.length}/${expectedCount}) — skipping delete`);
+          totalDownloaded += downloaded.length;
+        } else {
+          console.log(`[${i + 1}/${assets.length}] ✗ No files downloaded`);
+        }
       }
 
       await this.saveSession();
+
+      console.log('\n' + '═'.repeat(60));
+      console.log(`  SUMMARY`);
+      console.log('═'.repeat(60));
+      console.log(`  Assets processed:   ${assets.length}`);
+      console.log(`  Files downloaded:   ${totalDownloaded}`);
+      console.log(`  Assets deleted:     ${totalDeleted}`);
+      console.log('═'.repeat(60));
       console.log('\n[END] Workflow complete');
 
     } catch (error) {
