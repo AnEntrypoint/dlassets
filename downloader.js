@@ -26,6 +26,7 @@ const { chromium } = require('playwright');
 const fs = require('fs');
 const path = require('path');
 const readline = require('readline');
+const { spawn } = require('child_process');
 const CacheManager = require('./cache-manager');
 const AssetCache = require('./asset-cache');
 
@@ -305,9 +306,6 @@ class OptimizedDownloader {
     return new Promise((resolve) => {
       let resolved = false;
 
-      // Formats we want to download (skip preview images and redundant files)
-      const WANTED_FORMATS = new Set(['glb', 'usdz', 'obj', 'fbx']);
-
       const parseBody = (text) => {
         // Try full JSON parse
         try {
@@ -502,6 +500,85 @@ class OptimizedDownloader {
     }
   }
 
+  async convertDownloadedGlbs() {
+    const convertedDir = path.join(DOWNLOADS_DIR, 'converted');
+    if (!fs.existsSync(convertedDir)) fs.mkdirSync(convertedDir, { recursive: true });
+
+    const glbFiles = fs.readdirSync(DOWNLOADS_DIR)
+      .filter(f => f.endsWith('.glb'))
+      .filter(f => !fs.existsSync(path.join(convertedDir, f)));
+
+    if (glbFiles.length === 0) {
+      console.log('\n[Convert] All GLBs already converted, nothing to do');
+      return;
+    }
+
+    console.log(`\n[Convert] Converting ${glbFiles.length} GLB file(s) with Draco compression...`);
+
+    const filesList = glbFiles
+      .map(f => `"${path.join(DOWNLOADS_DIR, f).replace(/\\/g, '\\\\')}"`)
+      .join(', ');
+
+    const outputDirEscaped = convertedDir.replace(/\\/g, '\\\\');
+
+    const pythonScript = `import bpy, os
+output_dir = "${outputDirEscaped}"
+os.makedirs(output_dir, exist_ok=True)
+glb_files = [${filesList}]
+for glb_path in glb_files:
+    name = os.path.basename(glb_path)
+    out_path = os.path.join(output_dir, name)
+    try:
+        bpy.ops.wm.read_factory_settings(use_empty=True)
+        bpy.ops.import_scene.gltf(filepath=glb_path)
+        bpy.ops.export_scene.gltf(
+            filepath=out_path,
+            export_format='GLB',
+            export_image_format='WEBP',
+            export_image_add_webp=False,
+            export_image_quality=15,
+            export_draco_mesh_compression_enable=True,
+            export_draco_mesh_compression_level=6,
+        )
+        print(f"DONE: {out_path}")
+    except Exception as e:
+        print(f"ERROR {glb_path}: {str(e)}")
+`;
+
+    const tempScript = path.join(__dirname, 'convert-glb-temp.py');
+    fs.writeFileSync(tempScript, pythonScript);
+
+    try {
+      await new Promise((resolve, reject) => {
+        const blender = 'C:\\Program Files\\Blender Foundation\\Blender 5.0\\blender.exe';
+        const proc = spawn(blender, ['--background', '--python', tempScript], {
+          stdio: ['ignore', 'pipe', 'pipe'],
+        });
+
+        proc.stdout.on('data', d => {
+          const t = d.toString().trim();
+          if (t) console.log(`  [Blender] ${t}`);
+        });
+        proc.stderr.on('data', d => {
+          const t = d.toString().trim();
+          if (t) console.log(`  [Blender] ${t}`);
+        });
+
+        const timer = setTimeout(() => { proc.kill(); reject(new Error('Blender timeout')); }, 10 * 60 * 1000);
+        proc.on('close', code => {
+          clearTimeout(timer);
+          resolve();
+        });
+        proc.on('error', err => { clearTimeout(timer); reject(err); });
+      });
+
+      const done = fs.readdirSync(convertedDir).filter(f => f.endsWith('.glb'));
+      console.log(`[Convert] Done — ${done.length} file(s) in downloads/converted/`);
+    } finally {
+      if (fs.existsSync(tempScript)) fs.unlinkSync(tempScript);
+    }
+  }
+
   async run() {
     try {
       await this.init();
@@ -560,6 +637,7 @@ class OptimizedDownloader {
         }
       }
 
+      await this.convertDownloadedGlbs();
       await this.saveSession();
 
       console.log('\n' + '═'.repeat(60));
