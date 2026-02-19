@@ -524,25 +524,25 @@ class OptimizedDownloader {
       try {
         await new Promise((resolve, reject) => {
           const proc = spawn('npx', [
-            'gltf-transform', 'optimize', srcPath, tmpPath,
-            '--compress', 'draco', '--texture-compress', 'false', '--weld', 'true',
-          ], { stdio: ['ignore', 'pipe', 'pipe'], shell: true });
-          proc.stdout.on('data', d => { if (process.env.DEBUG_CONVERT) process.stdout.write(d); });
-          proc.stderr.on('data', d => { if (process.env.DEBUG_CONVERT) process.stderr.write(d); });
-          const timer = setTimeout(() => { proc.kill(); reject(new Error('optimize timeout')); }, 5 * 60 * 1000);
-          proc.on('close', code => { clearTimeout(timer); code === 0 ? resolve() : reject(new Error(`optimize exit ${code}`)); });
-          proc.on('error', err => { clearTimeout(timer); reject(err); });
-        });
-
-        await new Promise((resolve, reject) => {
-          const proc = spawn('npx', [
-            'gltf-transform', 'webp', tmpPath, outPath,
+            'gltf-transform', 'webp', srcPath, tmpPath,
             '--quality', '15',
           ], { stdio: ['ignore', 'pipe', 'pipe'], shell: true });
           proc.stdout.on('data', d => { if (process.env.DEBUG_CONVERT) process.stdout.write(d); });
           proc.stderr.on('data', d => { if (process.env.DEBUG_CONVERT) process.stderr.write(d); });
           const timer = setTimeout(() => { proc.kill(); reject(new Error('webp timeout')); }, 5 * 60 * 1000);
           proc.on('close', code => { clearTimeout(timer); code === 0 ? resolve() : reject(new Error(`webp exit ${code}`)); });
+          proc.on('error', err => { clearTimeout(timer); reject(err); });
+        });
+
+        await new Promise((resolve, reject) => {
+          const proc = spawn('npx', [
+            'gltf-transform', 'optimize', tmpPath, outPath,
+            '--compress', 'draco', '--texture-compress', 'false', '--weld', 'true',
+          ], { stdio: ['ignore', 'pipe', 'pipe'], shell: true });
+          proc.stdout.on('data', d => { if (process.env.DEBUG_CONVERT) process.stdout.write(d); });
+          proc.stderr.on('data', d => { if (process.env.DEBUG_CONVERT) process.stderr.write(d); });
+          const timer = setTimeout(() => { proc.kill(); reject(new Error('optimize timeout')); }, 5 * 60 * 1000);
+          proc.on('close', code => { clearTimeout(timer); code === 0 ? resolve() : reject(new Error(`optimize exit ${code}`)); });
           proc.on('error', err => { clearTimeout(timer); reject(err); });
         });
 
