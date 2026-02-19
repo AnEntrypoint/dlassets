@@ -22,3 +22,4 @@ debug-*.html
 api-response*.json
 asset-ids*.json
 downloader-fixed.js
+convert-glb-temp.py
