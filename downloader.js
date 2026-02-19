@@ -501,7 +501,7 @@ class OptimizedDownloader {
   }
 
   async convertDownloadedGlbs() {
-    const convertedDir = path.join(DOWNLOADS_DIR, 'converted');
+    const convertedDir = path.join(__dirname, 'converted');
     if (!fs.existsSync(convertedDir)) fs.mkdirSync(convertedDir, { recursive: true });
 
     const glbFiles = fs.readdirSync(DOWNLOADS_DIR)
@@ -534,9 +534,7 @@ for glb_path in glb_files:
         bpy.ops.export_scene.gltf(
             filepath=out_path,
             export_format='GLB',
-            export_image_format='WEBP',
-            export_image_add_webp=False,
-            export_image_quality=15,
+            export_image_format='AUTO',
             export_draco_mesh_compression_enable=True,
             export_draco_mesh_compression_level=6,
         )
@@ -572,8 +570,18 @@ for glb_path in glb_files:
         proc.on('error', err => { clearTimeout(timer); reject(err); });
       });
 
+      let movedCount = 0;
+      for (const f of glbFiles) {
+        const convertedPath = path.join(convertedDir, f);
+        const sourcePath = path.join(DOWNLOADS_DIR, f);
+        if (fs.existsSync(convertedPath) && fs.existsSync(sourcePath)) {
+          fs.unlinkSync(sourcePath);
+          movedCount++;
+        }
+      }
+
       const done = fs.readdirSync(convertedDir).filter(f => f.endsWith('.glb'));
-      console.log(`[Convert] Done — ${done.length} file(s) in downloads/converted/`);
+      console.log(`[Convert] Done — ${done.length} file(s) in converted/, ${movedCount} source(s) removed from downloads/`);
     } finally {
       if (fs.existsSync(tempScript)) fs.unlinkSync(tempScript);
     }
