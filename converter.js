@@ -124,8 +124,8 @@ for usdz_path in usdz_files:
 
       const timeout = setTimeout(() => {
         process.kill();
-        reject(new Error('Blender conversion timeout after 5 minutes'));
-      }, 5 * 60 * 1000);
+        reject(new Error('Blender conversion timeout after 50 minutes'));
+      }, 50 * 60 * 1000);
 
       process.on('close', (code) => {
         clearTimeout(timeout);

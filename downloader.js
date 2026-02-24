@@ -222,7 +222,7 @@ class OptimizedDownloader {
     }
 
     this.page = await this.context.newPage();
-    this.page.setDefaultTimeout(300000);
+    this.page.setDefaultTimeout(3000000);
 
     console.log('[Optimization] Setting up intelligent resource blocking + caching...');
     await this.setupNetworkOptimization();
@@ -259,7 +259,7 @@ class OptimizedDownloader {
     console.log(`[Nav] ✓ Page loaded in ${navTime}ms`);
 
     const waitStart = Date.now();
-    await this.page.waitForLoadState('networkidle', { timeout: 60000 }).catch(() => {});
+    await this.page.waitForLoadState('networkidle', { timeout: 600000 }).catch(() => {});
     const waitTime = Date.now() - waitStart;
     console.log(`[Nav] ✓ Network idle after ${waitTime}ms`);
 
@@ -279,7 +279,7 @@ class OptimizedDownloader {
     console.log('[Check] ✓ Page initialized successfully (no error boundary)');
   }
 
-  async waitForListItems(timeout = 60000) {
+  async waitForListItems(timeout = 600000) {
     console.log('[Load] Waiting for list items to render...');
     const start = Date.now();
     let lastCount = 0;
@@ -293,7 +293,7 @@ class OptimizedDownloader {
       }
       lastCount = count;
       if (Date.now() - start < timeout) {
-        await this.page.waitForTimeout(10000);
+        await this.page.waitForTimeout(100000);
       }
     }
 
@@ -369,14 +369,14 @@ class OptimizedDownloader {
         }
       });
 
-      // Timeout after 90s
+      // Timeout after 900s
       setTimeout(() => {
         if (!resolved) {
           resolved = true;
           console.log('[API] ✗ Timeout waiting for asset list');
           resolve([]);
         }
-      }, 90000);
+      }, 900000);
     });
   }
 
@@ -386,7 +386,7 @@ class OptimizedDownloader {
     return new Promise((resolve, reject) => {
       const proto = url.startsWith('https') ? https : http;
       const file = fs.createWriteStream(destPath);
-      const req = proto.get(url, { timeout: 120000 }, (res) => {
+      const req = proto.get(url, { timeout: 1200000 }, (res) => {
         if (res.statusCode === 301 || res.statusCode === 302) {
           file.close();
           fs.unlink(destPath, () => {});
@@ -529,7 +529,7 @@ class OptimizedDownloader {
           ], { stdio: ['ignore', 'pipe', 'pipe'], shell: true });
           proc.stdout.on('data', d => { if (process.env.DEBUG_CONVERT) process.stdout.write(d); });
           proc.stderr.on('data', d => { if (process.env.DEBUG_CONVERT) process.stderr.write(d); });
-          const timer = setTimeout(() => { proc.kill(); reject(new Error('webp timeout')); }, 5 * 60 * 1000);
+          const timer = setTimeout(() => { proc.kill(); reject(new Error('webp timeout')); }, 50 * 60 * 1000);
           proc.on('close', code => { clearTimeout(timer); code === 0 ? resolve() : reject(new Error(`webp exit ${code}`)); });
           proc.on('error', err => { clearTimeout(timer); reject(err); });
         });
@@ -541,7 +541,7 @@ class OptimizedDownloader {
           ], { stdio: ['ignore', 'pipe', 'pipe'], shell: true });
           proc.stdout.on('data', d => { if (process.env.DEBUG_CONVERT) process.stdout.write(d); });
           proc.stderr.on('data', d => { if (process.env.DEBUG_CONVERT) process.stderr.write(d); });
-          const timer = setTimeout(() => { proc.kill(); reject(new Error('optimize timeout')); }, 5 * 60 * 1000);
+          const timer = setTimeout(() => { proc.kill(); reject(new Error('optimize timeout')); }, 50 * 60 * 1000);
           proc.on('close', code => { clearTimeout(timer); code === 0 ? resolve() : reject(new Error(`optimize exit ${code}`)); });
           proc.on('error', err => { clearTimeout(timer); reject(err); });
         });
