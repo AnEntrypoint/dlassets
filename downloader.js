@@ -293,7 +293,7 @@ class OptimizedDownloader {
       }
       lastCount = count;
       if (Date.now() - start < timeout) {
-        await this.page.waitForTimeout(100000);
+        await this.page.waitForTimeout(1000);
       }
     }
 
@@ -380,17 +380,18 @@ class OptimizedDownloader {
     });
   }
 
-  async downloadFile(url, destPath) {
+  async downloadFile(url, destPath, attempt = 0) {
     const https = require('https');
     const http = require('http');
-    return new Promise((resolve, reject) => {
+    const MAX_ATTEMPTS = 4;
+    const attempt1 = () => new Promise((resolve, reject) => {
       const proto = url.startsWith('https') ? https : http;
       const file = fs.createWriteStream(destPath);
-      const req = proto.get(url, { timeout: 1200000 }, (res) => {
+      const req = proto.get(url, { timeout: 120000 }, (res) => {
         if (res.statusCode === 301 || res.statusCode === 302) {
           file.close();
           fs.unlink(destPath, () => {});
-          return this.downloadFile(res.headers.location, destPath).then(resolve).catch(reject);
+          return this.downloadFile(res.headers.location, destPath, attempt).then(resolve).catch(reject);
         }
         if (res.statusCode !== 200) {
           file.close();
@@ -404,6 +405,15 @@ class OptimizedDownloader {
       req.on('error', (err) => { fs.unlink(destPath, () => {}); reject(err); });
       req.on('timeout', () => { req.destroy(); reject(new Error('Download timeout')); });
     });
+    try {
+      return await attempt1();
+    } catch (err) {
+      if (attempt >= MAX_ATTEMPTS - 1) throw err;
+      const wait = Math.pow(2, attempt + 1) * 2000;
+      console.log(`  [Retry ${attempt + 1}/${MAX_ATTEMPTS - 1}] ${err.message} — waiting ${wait / 1000}s...`);
+      await new Promise(r => setTimeout(r, wait));
+      return this.downloadFile(url, destPath, attempt + 1);
+    }
   }
 
   async downloadAsset(creation) {
@@ -421,46 +431,57 @@ class OptimizedDownloader {
     const idShort = id.slice(0, 8);
     const downloaded = [];
     let expectedCount = 0;
+    const MAX_ASSET_ATTEMPTS = 3;
 
     console.log(`[Download] "${title}" — ${result.length} variant(s)...`);
 
-    for (let vi = 0; vi < result.length; vi++) {
-      const variant = result[vi];
-      const urls = variant.urlResult || {};
+    for (let assetAttempt = 0; assetAttempt < MAX_ASSET_ATTEMPTS; assetAttempt++) {
+      if (assetAttempt > 0) {
+        console.log(`[Download] Retrying asset "${title}" (attempt ${assetAttempt + 1}/${MAX_ASSET_ATTEMPTS})...`);
+        downloaded.length = 0;
+        expectedCount = 0;
+      }
 
-      for (const format of WANTED_FORMATS) {
-        const url = urls[format];
-        if (!url || typeof url !== 'string') continue;
-        expectedCount++;
+      for (let vi = 0; vi < result.length; vi++) {
+        const variant = result[vi];
+        const urls = variant.urlResult || {};
 
-        const ext = url.split('?')[0].split('.').pop().toLowerCase() || format;
-        const filename = `${safeName}_${idShort}_v${vi + 1}.${ext}`;
-        const destPath = path.join(DOWNLOADS_DIR, filename);
+        for (const format of WANTED_FORMATS) {
+          const url = urls[format];
+          if (!url || typeof url !== 'string') continue;
+          expectedCount++;
 
-        if (fs.existsSync(destPath)) {
-          const size = fs.statSync(destPath).size;
-          if (size > 5 * 1024 * 1024) {
-            console.log(`  [v${vi + 1}/${format}] ✓ Already exists (${(size / 1024 / 1024).toFixed(1)} MB)`);
-            downloaded.push({ format, filename, size });
-            continue;
+          const ext = url.split('?')[0].split('.').pop().toLowerCase() || format;
+          const filename = `${safeName}_${idShort}_v${vi + 1}.${ext}`;
+          const destPath = path.join(DOWNLOADS_DIR, filename);
+
+          if (fs.existsSync(destPath)) {
+            const size = fs.statSync(destPath).size;
+            if (size > 5 * 1024 * 1024) {
+              console.log(`  [v${vi + 1}/${format}] ✓ Already exists (${(size / 1024 / 1024).toFixed(1)} MB)`);
+              downloaded.push({ format, filename, size });
+              continue;
+            }
           }
-        }
 
-        try {
-          console.log(`  [v${vi + 1}/${format}] Downloading ${filename}...`);
-          await this.downloadFile(url, destPath);
-          const size = fs.statSync(destPath).size;
-          if (size < 5 * 1024 * 1024) {
-            console.log(`  [v${vi + 1}/${format}] ✗ Too small (${(size / 1024 / 1024).toFixed(1)} MB) - removing`);
-            fs.unlinkSync(destPath);
-          } else {
-            console.log(`  [v${vi + 1}/${format}] ✓ ${(size / 1024 / 1024).toFixed(1)} MB`);
-            downloaded.push({ format, filename, size });
+          try {
+            console.log(`  [v${vi + 1}/${format}] Downloading ${filename}...`);
+            await this.downloadFile(url, destPath);
+            const size = fs.statSync(destPath).size;
+            if (size < 5 * 1024 * 1024) {
+              console.log(`  [v${vi + 1}/${format}] ✗ Too small (${(size / 1024 / 1024).toFixed(1)} MB) - removing`);
+              fs.unlinkSync(destPath);
+            } else {
+              console.log(`  [v${vi + 1}/${format}] ✓ ${(size / 1024 / 1024).toFixed(1)} MB`);
+              downloaded.push({ format, filename, size });
+            }
+          } catch (err) {
+            console.log(`  [v${vi + 1}/${format}] ✗ Failed: ${err.message}`);
           }
-        } catch (err) {
-          console.log(`  [v${vi + 1}/${format}] ✗ Failed: ${err.message}`);
         }
       }
+
+      if (downloaded.length === expectedCount) break;
     }
 
     const success = expectedCount > 0 && downloaded.length === expectedCount;
